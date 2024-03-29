@@ -1,0 +1,1820 @@
+Signed-off-by: João Peixoto <joaopeixotooficial@gmail.com>
+
+diff --git a/accel/Kconfig b/accel/Kconfig
+index 8bdedb7d1..3d9dc6fcf 100644
+--- a/accel/Kconfig
++++ b/accel/Kconfig
+@@ -16,6 +16,15 @@ config TCG
+ config KVM
+     bool
+ 
++config BAO
++    bool
++
++config BAO_EVENTFD
++    bool
++
++config BAO_IRQFD
++    bool
++
+ config XEN
+     bool
+     select FSDEV_9P if VIRTFS
+diff --git a/accel/bao/bao-all.c b/accel/bao/bao-all.c
+new file mode 100644
+index 000000000..66922b235
+--- /dev/null
++++ b/accel/bao/bao-all.c
+@@ -0,0 +1,609 @@
++/*
++ * QEMU Hypervisor.framework (Bao) support
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/module.h"
++#include "qapi/error.h"
++#include "qemu/accel.h"
++#include "qemu/atomic.h"
++#include "sysemu/cpus.h"
++#include "sysemu/runstate.h"
++#include "sysemu/bao.h"
++#include "hw/boards.h"
++#include "hw/pci/pci.h"
++#include "hw/pci/pci_bus.h"
++#include "migration/vmstate.h"
++#include "qemu/option.h"
++#include "qemu/config-file.h"
++#include "qemu/qemu-options.h"
++#include "hw/arm/virt.h"
++#include "hw/arm/virt-bao.h"
++#include <stdarg.h>
++#include <sys/ioctl.h>
++#include "ioreq-api.h"
++
++#define IRQ_OFFSET (0x2f - BAO_IO_REQUEST_MAX + 1)
++
++#define CALCULATE_IRQ_IDX(irq) (irq - IRQ_OFFSET)
++
++bool bao_allowed;
++
++/* QEMU thread to handle the VirtIO requests */
++static QemuThread bao_virtio_thread_to_qemu;
++/* QEMU thread to handle QEMU notifications */
++static QemuThread bao_virtio_thread_from_qemu;
++
++static void *bao_virtio_worker_thread_to_qemu(void *opaque);
++static void *bao_virtio_worker_thread_from_qemu(void *opaque);
++
++/* BaoVM */
++typedef struct BaoVM
++{
++    struct virtio_backend_vm vm;
++    MemoryListener mem_listener;
++} BaoVM;
++
++/* BaoState */
++typedef struct BaoState
++{
++    AccelState parent_obj;
++    int vm_num;
++    struct BaoVM vm[BAO_IO_REQUEST_MAX];
++} BaoState;
++
++#define TYPE_BAO_ACCEL ACCEL_CLASS_NAME("bao")
++
++DECLARE_INSTANCE_CHECKER(BaoState, BAO_STATE, TYPE_BAO_ACCEL)
++
++/* IRQ pending flag array */
++static volatile int irq_pending[BAO_IO_REQUEST_MAX] = {0};
++
++/* Device IRQ array */
++static int device_irq[BAO_IO_REQUEST_MAX] = {0};
++
++/* Bao custom parameters */
++struct cmd_params cmd_params[BAO_IO_REQUEST_MAX];
++
++/**
++ * @brief Set the IRQ flag
++ * 
++ * @param irq specifies the IRQ number
++ * @param value specifies the value to set the IRQ flag
++ */
++void bao_set_irq(int irq, bool value)
++{
++    // update the IRQ number index
++    int irq_idx = CALCULATE_IRQ_IDX(irq);
++
++    // check if the IRQ number is the same as the device IRQ
++    if (device_irq[irq_idx] == irq && value)
++        qatomic_set(&irq_pending[irq_idx], value);
++}
++
++static int global_vm_fd[BAO_IO_REQUEST_MAX] = {0};
++
++int bao_set_irqfd(int fd)
++{
++    struct bao_irqfd irqfd = {
++        .fd = fd,
++        .flags = 0,
++    };
++    return ioctl(global_vm_fd[0], BAO_IOCTL_IRQFD, &irqfd);
++}
++
++/**
++ * @brief Get the IRQ flag
++ * 
++ * @return true if the IRQ flag is set, false otherwise
++ */
++static bool bao_get_irq(int irq)
++{
++    // update the IRQ number index
++    int irq_idx = CALCULATE_IRQ_IDX(irq);
++
++    return qatomic_read(&irq_pending[irq_idx]);
++}
++
++/**
++ * @brief Clear the IRQ flag
++ * 
++ * @param irq specifies the IRQ number
++ */
++static void bao_clear_irq(int irq)
++{
++    // update the IRQ number index
++    int irq_idx = CALCULATE_IRQ_IDX(irq);
++
++    // check if the IRQ number is the same as the device IRQ
++    if (irq == device_irq[irq_idx])
++        qatomic_set(&irq_pending[irq_idx], 0);
++}
++
++/**
++ * @brief Setup the Bao worker threads
++ * 
++ * @param ms specifies the MachineState
++ * @param accel specifies the AccelState
++ */
++static void bao_setup_post(MachineState *ms, AccelState *accel)
++{
++    BaoState *s = BAO_STATE(ms->accelerator);
++    char name[32];
++
++    for (int i = 0; i < s->vm_num; i++)
++    {
++        snprintf(name, sizeof(name), "bao-virtio-to-qemu-%d", i);
++
++        // create the QEMU thread to handle the VirtIO requests
++        qemu_thread_create(&bao_virtio_thread_to_qemu, name,
++                       bao_virtio_worker_thread_to_qemu, &s->vm[i], QEMU_THREAD_JOINABLE);
++
++        snprintf(name, sizeof(name), "bao-virtio-from-qemu-%d", i);
++
++        // create the QEMU thread to handle requests from QEMU:
++        // - Used Buffer Notifications
++        // - Change Configuration Notifications
++        qemu_thread_create(&bao_virtio_thread_from_qemu, name,
++                        bao_virtio_worker_thread_from_qemu, &s->vm[i], QEMU_THREAD_JOINABLE);
++    }
++}
++
++/**
++ * @brief Handle the VirtIO requests
++ * 
++ * @param s specifies the BaoVM
++ */
++static inline void handle_ioreq(BaoVM *s)
++{
++    MemTxResult ret = MEMTX_OK;
++
++    qemu_mutex_lock_iothread();
++
++    switch (s->vm.req.op)
++    {
++    case BAO_IO_WRITE:
++        ret = address_space_write(&address_space_memory, s->vm.req.addr, MEMTXATTRS_UNSPECIFIED, &s->vm.req.value, s->vm.req.access_width);
++        break;
++    case BAO_IO_READ:
++        ret = address_space_read(&address_space_memory, s->vm.req.addr, MEMTXATTRS_UNSPECIFIED, &s->vm.req.value, s->vm.req.access_width);
++        break;
++    case BAO_IO_ASK:
++    case BAO_IO_NOTIFY:
++        break;
++    default:
++        error_report("invalid ioreq direction (%d)", (int)s->vm.req.op);
++        break;
++    }
++
++    qemu_mutex_unlock_iothread();
++
++    if (ret != MEMTX_OK)
++    {
++        error_report("failed to %s memory at 0x%lx",
++                     s->vm.req.op == BAO_IO_WRITE ? "write" : "read",
++                     (unsigned long)s->vm.req.addr);
++    }
++}
++
++/**
++ * @brief Handles the VirtIO requests from the VM
++ * 
++ * @param opaque specifies BaoVM
++ */
++static void *bao_virtio_worker_thread_to_qemu(void *opaque)
++{
++    BaoVM *s = opaque;
++    int rc = 0;
++
++    for (;;)
++    {
++        // attach the I/O client
++        rc = s->vm.attach_io_client(&s->vm);
++        if (rc < 0)
++        {
++            info_report("ERROR: Failed to attach I/O client.\n");
++            return NULL;
++        }
++
++        // fill the VirtIO request with zeros
++        s->vm.req.virtio_id = 0x0;
++        s->vm.req.reg_off = 0x0;
++        s->vm.req.op = BAO_IO_ASK;
++        s->vm.req.value = 0x0;
++        s->vm.req.access_width = 0x0;
++        s->vm.req.ret = 0x0;
++
++        // request the VirtIO request
++        if (s->vm.request_io(&s->vm, &s->vm.req) == 0)
++        {
++            // handle the request
++            handle_ioreq(s);
++
++            // notify the VirtIO frontend VM
++            rc = s->vm.notify_io_completed(&s->vm, &s->vm.req);
++            if (rc < 0)
++            {
++                info_report("ERROR: Failed to notify VirtIO frontend VM\n");
++                return NULL;
++            }
++        }
++    }
++
++    return NULL;
++}
++
++/**
++ * @brief Handles the Used Buffer Notifications and Change Configuration Notifications
++ * 
++ * @param opaque specifies BaoVM
++ */
++static void *bao_virtio_worker_thread_from_qemu(void *opaque)
++{
++    BaoVM *s = opaque;
++
++    for (;;)
++    {
++        // check for Used Buffer Notifications or Change Configuration Notifications
++        if (bao_get_irq(s->vm.irq))
++        {
++            // notify the guest
++            s->vm.notify_guest(&s->vm);
++
++            // clear the IRQ flag
++            bao_clear_irq(s->vm.irq);
++        }
++
++        // wait a bit before checking again
++        for (volatile int i = 0; i < 1000; i++);
++    }
++
++    return NULL;
++}
++
++/**
++ * @brief Set the I/O eventfd
++ * 
++ * @param s specifies the BaoVM
++ * @param fd specifies the file descriptor
++ * @param addr specifies the address
++ * @param data specifies the data
++ * @param assign specifies whether to assign or not
++ * @param size specifies the size
++ * @param datamatch specifies whether to match the data or not
++ * @return int 
++ */
++static int bao_ioeventfd_set(BaoVM *s, int fd, hwaddr addr, uint32_t data,
++                             bool assign, uint32_t size, bool datamatch)
++{
++    int rc = 0;
++    struct bao_ioeventfd config = {
++        .fd = fd,
++        .addr = addr,
++        .len = size,
++        .data = datamatch ? data : 0,
++        .flags = 0,
++    };
++
++    if (datamatch)
++    {
++        config.flags |= BAO_IOEVENTFD_FLAG_DATAMATCH;
++    }
++
++    if (!assign)
++    {
++        config.flags |= BAO_IOEVENTFD_FLAG_DEASSIGN;
++    }
++
++    rc = s->vm.create_ioeventfd(&s->vm, &config);
++    if (rc < 0)
++    {
++        info_report("ERROR: Failed to create I/O client.\n");
++        return -1;
++    }
++
++    return 0;
++}
++
++/**
++ * @brief Add the I/O eventfd
++ * 
++ * @param listener specifies the MemoryListener
++ * @param section specifies the MemoryRegionSection
++ * @param match_data specifies whether to match the data or not
++ * @param data specifies the data
++ * @param e specifies the EventNotifier
++ */
++static void bao_io_ioeventfd_add(MemoryListener *listener,
++                                 MemoryRegionSection *section,
++                                 bool match_data, uint64_t data,
++                                 EventNotifier *e)
++{
++    BaoVM *s = container_of(listener, BaoVM, mem_listener);
++    int fd = event_notifier_get_fd(e);
++    int rc;
++
++    rc = bao_ioeventfd_set(s, fd, section->offset_within_address_space,
++                           data, true, int128_get64(section->size),
++                           match_data);
++    if (rc < 0)
++    {
++        fprintf(stderr, "%s: error adding ioeventfd: %s (%d)\n",
++                __func__, strerror(-rc), -rc);
++        abort();
++    }
++}
++
++/**
++ * @brief Delete the I/O eventfd
++ * 
++ * @param listener specifies the MemoryListener
++ * @param section specifies the MemoryRegionSection
++ * @param match_data specifies whether to match the data or not
++ * @param data specifies the data
++ * @param e specifies the EventNotifier
++ */
++static void bao_io_ioeventfd_del(MemoryListener *listener,
++                                 MemoryRegionSection *section,
++                                 bool match_data, uint64_t data,
++                                 EventNotifier *e)
++
++{
++    BaoVM *s = container_of(listener, BaoVM, mem_listener);
++    int fd = event_notifier_get_fd(e);
++    int rc;
++
++    rc = bao_ioeventfd_set(s, fd, section->offset_within_address_space,
++                           data, false, int128_get64(section->size),
++                           match_data);
++    if (rc < 0)
++    {
++        fprintf(stderr, "%s: error deleting ioeventfd: %s (%d)\n",
++                __func__, strerror(-rc), -rc);
++        abort();
++    }
++}
++
++/**
++ * @brief Add the region
++ * 
++ * @param listener specifies the MemoryListener
++ * @param section specifies the MemoryRegionSection
++ */
++static void bao_region_add(MemoryListener *listener, MemoryRegionSection *section)
++{
++    /*
++    info_report("%s entered, region name %s, offset within region 0x%lx, size 0x%lx\n", __func__, memory_region_name(section->mr), (uint64_t)section->offset_within_address_space,
++                (uint64_t)section->size);
++    */
++}
++
++/**
++ * @brief Delete the region
++ * 
++ * @param listener specifies the MemoryListener
++ * @param section specifies the MemoryRegionSection
++ */
++static void bao_region_del(MemoryListener *listener, MemoryRegionSection *section)
++{
++    //info_report("WARNING: %s entered, but no real implementation\n", __func__);
++}
++
++/**
++ * @brief Change the state handler
++ * 
++ * @param opaque specifies the BaoState
++ * @param running specifies whether the VM is running or not
++ * @param state specifies the RunState
++ */
++static void bao_change_state_handler(void *opaque, bool running, RunState state)
++{
++    if (running)
++    {
++        printf("Starting QEMU app...\n");
++    }
++}
++
++/**
++ * @brief Tokenize the string
++ * 
++ * @param optarg specifies the string
++ * @param delim specifies the delimiter
++ * @param tokens specifies the tokens
++ * @param max_tokens specifies the maximum number of tokens
++ * @return int 
++ */
++static int bao_tokenizer(const char *optarg, const char *delim, int tokens[], int max_tokens)
++{
++    char *token;
++    int i = 0;
++
++    char *optarg_cpy = strdup(optarg);
++
++    token = strtok(optarg_cpy, delim);
++    while (token != NULL && i < max_tokens)
++    {
++        tokens[i++] = strtoull(token, NULL, 10);
++        token = strtok(NULL, delim);
++    }
++
++    free(optarg_cpy);
++
++    return i;
++}
++
++/**
++ * @brief Parse the command line arguments
++ * 
++ * @return int 
++ */
++static int bao_parse_cmdline(void)
++{
++    int vms[BAO_IO_REQUEST_MAX];
++    int irqs[BAO_IO_REQUEST_MAX];
++    int ram_addrs[BAO_IO_REQUEST_MAX];
++    int ram_sizes[BAO_IO_REQUEST_MAX];
++
++    const char *vms_str = qemu_opt_get(qemu_find_opts_singleton("bao"), "vm_id");
++    const char *irqs_str = qemu_opt_get(qemu_find_opts_singleton("bao"), "irq");
++    const char *ram_addrs_str = qemu_opt_get(qemu_find_opts_singleton("bao"), "ram_addr");
++    const char *ram_sizes_str = qemu_opt_get(qemu_find_opts_singleton("bao"), "ram_size");
++
++    if (vms_str == NULL || irqs_str == NULL || ram_addrs_str == NULL || ram_sizes_str == NULL)
++    {
++        info_report("ERROR: Failed to parse command line arguments.\n");
++        return 0;
++    }
++
++    int num_vms = bao_tokenizer(vms_str, "-", vms, BAO_IO_REQUEST_MAX);
++    int num_irqs = bao_tokenizer(irqs_str, "-", irqs, BAO_IO_REQUEST_MAX);
++    int num_ram_addrs = bao_tokenizer(ram_addrs_str, "-", ram_addrs, BAO_IO_REQUEST_MAX);
++    int num_ram_sizes = bao_tokenizer(ram_sizes_str, "-", ram_sizes, BAO_IO_REQUEST_MAX);
++
++    // verify if the number of VMs, IRQs, RAM addresses and RAM sizes are the same
++    if (num_vms != num_irqs || num_vms != num_ram_addrs || num_vms != num_ram_sizes)
++    {
++        info_report("ERROR: The number of VMs, IRQs, RAM addresses and RAM sizes must be the same.\n");
++        return 0;
++    }
++    
++    // update the cmd_params array
++    for (int i = 0; i < num_vms; i++)
++    {
++        cmd_params[i].vm_id = vms[i];
++        cmd_params[i].irq = irqs[i];
++        cmd_params[i].ram_addr = ram_addrs[i];
++        cmd_params[i].ram_size = ram_sizes[i];
++    }
++
++    return num_vms;
++}
++
++/**
++ * @brief Initialize the Bao accelerator
++ * 
++ * @param ms specifies the MachineState
++ * @return int 
++ */
++static int bao_init(MachineState *ms)
++{
++    BaoState *s = BAO_STATE(ms->accelerator);
++    int rc = 0;
++    uint64_t ram_addr = 0;
++    uint64_t ram_size = 0;
++
++    // initialize QEMU
++    info_report("QEMU - START\n");
++    for (volatile int i = 0; i < BAO_IO_REQUEST_MAX; i++)
++    {
++        cmd_params[i].vm_id = 0;
++        cmd_params[i].irq = 0;
++        cmd_params[i].ram_addr = 0;
++        cmd_params[i].ram_size = 0;
++    }
++
++    // parse the command line arguments
++    s->vm_num = bao_parse_cmdline();
++    if (!s->vm_num)
++    {
++        info_report("ERROR: Failed to parse command line arguments.\n");
++        return -1;
++    }
++
++    info_report("QEMU - Configuring [%d] VirtIO Backend VMs Instances ...\n", s->vm_num);
++
++    // set the RAM address and size
++    ram_addr = cmd_params[0].ram_addr;
++    for (volatile int i = 0; i < s->vm_num; i++)
++        ram_size += cmd_params[i].ram_size;
++    info_report("Setting Bao RAM address=0x%lx, RAM size=0x%lx\n", ram_addr, ram_size);
++
++    // set the Bao memory map
++    bao_virt_memmap_set(ram_addr, ram_size);
++
++    for (volatile int i = 0; i < s->vm_num; i++)
++    {
++        info_report("VirtIO Backend VM instance [%ld]:\nVirtIO Device IRQ - 0x%lx\nRAM address - 0x%lx\nRAM size - 0x%lx\n", cmd_params[i].vm_id, cmd_params[i].irq, cmd_params[i].ram_addr, cmd_params[i].ram_size);
++
++        // update the device IRQ
++        device_irq[CALCULATE_IRQ_IDX(cmd_params[i].irq)] = cmd_params[i].irq;
++
++        // create a VirtIO backend VM with VM ID (or virtio_id) equal to 0
++        info_report("QEMU - CREATING VM %ld VIRTIO BACKEND\n", cmd_params[i].vm_id);
++        s->vm[i].vm = create_virtio_backend_vm(cmd_params[i]);
++
++        // create an I/O client associated with the VirtIO backend VM
++        info_report("QEMU - CREATE IO CLIENT\n");
++        rc = s->vm[i].vm.create_io_client(&s->vm[i].vm);
++        if (rc < 0)
++        {
++            printf("ERROR: Failed to create I/O client.\n");
++            s->vm[i].vm.destroy(&s->vm[i].vm);
++            return -1;
++        }
++
++        global_vm_fd[i] = s->vm[i].vm.vm_fd;
++
++        // setup the memory listener
++        s->vm[i].mem_listener.eventfd_add = bao_io_ioeventfd_add;
++        s->vm[i].mem_listener.eventfd_del = bao_io_ioeventfd_del;
++        s->vm[i].mem_listener.region_add = bao_region_add;
++        s->vm[i].mem_listener.region_del = bao_region_del;
++        memory_listener_register(&s->vm[i].mem_listener, &address_space_memory);
++    }
++
++    qemu_add_vm_change_state_handler(bao_change_state_handler, s);
++
++    return 0;
++}
++
++static void bao_accel_class_init(ObjectClass *oc, void *data)
++{
++    AccelClass *ac = ACCEL_CLASS(oc);
++
++    ac->name = "bao";
++    ac->init_machine = bao_init;
++    ac->setup_post = bao_setup_post;
++    ac->allowed = &bao_allowed;
++}
++
++static void bao_accel_instance_init(Object *obj)
++{
++    info_report("%s\n", __func__);
++}
++
++static const TypeInfo bao_accel_type = {
++    .name = TYPE_BAO_ACCEL,
++    .parent = TYPE_ACCEL,
++    .instance_init = bao_accel_instance_init,
++    .class_init = bao_accel_class_init,
++    .instance_size = sizeof(BaoState),
++};
++
++static void bao_accel_ops_class_init(ObjectClass *oc, void *data)
++{
++    AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
++    ops->create_vcpu_thread = dummy_start_vcpu_thread;
++}
++
++static const TypeInfo bao_accel_ops_type = {
++    .name = ACCEL_OPS_NAME("bao"),
++    .parent = TYPE_ACCEL_OPS,
++    .class_init = bao_accel_ops_class_init,
++    .abstract = true,
++};
++
++static void bao_type_init(void)
++{
++    type_register_static(&bao_accel_type);
++    type_register_static(&bao_accel_ops_type);
++}
++type_init(bao_type_init);
+\ No newline at end of file
+diff --git a/accel/bao/ioreq-api.h b/accel/bao/ioreq-api.h
+new file mode 100644
+index 000000000..498e7f515
+--- /dev/null
++++ b/accel/bao/ioreq-api.h
+@@ -0,0 +1,222 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao VirtIO Backend VM I/O Request API
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Author:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef __BAO_IOREQ_API_H
++#define __BAO_IOREQ_API_H
++
++#include <stdio.h>
++#include <stdint.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include <unistd.h>
++
++#define BAO_IO_WRITE 0x0
++#define BAO_IO_READ 0x1
++#define BAO_IO_ASK 0x2
++#define BAO_IO_NOTIFY 0x3
++
++#define BAO_NAME_LEN 16
++#define BAO_IO_REQUEST_MAX 16
++
++struct bao_virtio_request {
++	uint64_t virtio_id;
++	uint64_t reg_off;
++	uint64_t addr;
++	uint64_t op;
++	uint64_t value;
++	uint64_t access_width;
++    uint64_t cpu_id;
++    uint64_t vcpu_id;
++	uint64_t ret;
++};
++
++struct bao_ioeventfd {
++	uint32_t fd;
++	uint32_t flags;
++	uint64_t addr;
++	uint32_t len;
++	uint32_t reserved;
++	uint64_t data;
++};
++
++struct bao_irqfd {
++	int32_t fd;
++	uint32_t flags;
++};
++
++struct cmd_params
++{
++    int64_t vm_id;
++    int64_t irq;
++    int64_t ram_addr;
++    int64_t ram_size;
++};
++
++#define BAO_IOCTL_TYPE 0xA6
++
++#define BAO_IOCTL_VM_VIRTIO_BACKEND_CREATE _IOW(BAO_IOCTL_TYPE, 0x01, uint32_t)
++#define BAO_IOCTL_VM_VIRTIO_BACKEND_DESTROY _IOW(BAO_IOCTL_TYPE, 0x02, uint32_t)
++
++#define BAO_IOCTL_IO_CREATE_CLIENT _IO(BAO_IOCTL_TYPE, 0x03)
++#define BAO_IOCTL_IO_DESTROY_CLIENT _IO(BAO_IOCTL_TYPE, 0x04)
++#define BAO_IOCTL_IO_ATTACH_CLIENT _IO(BAO_IOCTL_TYPE, 0x05)
++
++#define BAO_IOCTL_IO_REQUEST _IOWR(BAO_IOCTL_TYPE, 0x06, struct bao_virtio_request)
++#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED \
++	_IOW(BAO_IOCTL_TYPE, 0x07, struct bao_virtio_request)
++#define BAO_IOCTL_IO_NOTIFY_GUEST _IO(BAO_IOCTL_TYPE, 0x08)
++
++#define BAO_IOCTL_IOEVENTFD _IOW(BAO_IOCTL_TYPE, 0x09, struct bao_ioeventfd)
++#define BAO_IOCTL_IRQFD _IOW(BAO_IOCTL_TYPE, 0x0A, struct bao_irqfd)
++
++#define BAO_IOCTL_IO_REQUEST_QEMU _IOWR(BAO_IOCTL_TYPE, 0x0B, struct bao_virtio_request)
++#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED_QEMU \
++	_IOW(BAO_IOCTL_TYPE, 0x0C, struct bao_virtio_request)
++
++#define BAO_IOEVENTFD_FLAG_DATAMATCH (1 << 1)
++#define BAO_IOEVENTFD_FLAG_DEASSIGN (1 << 2)
++#define BAO_IRQFD_FLAG_DEASSIGN	0x01
++
++/**
++ * @brief VirtIO Backend VM abstraction
++ * 
++ * @note: Variables
++ * @fd: Bao file descriptor
++ * @vm_fd: VM file descriptor
++ * @vm_id: VM ID (or VirtIO ID)
++ * @ram_addr: RAM address
++ * @req: VirtIO request
++ * 
++ * @note: Methods
++ * @create: Create the VirtIO Backend VM method (thgis method is called automatically when the VM object is created)
++ * @destroy: Destroy the VirtIO Backend VM
++ * @create_io_client: Create a IO Client for the VM
++ * @destroy_io_client: Destroy the IO Client
++ * @attach_io_client: Attach the IO Client
++ * @request_io: Request a IO request
++ * @notify_io_completed: Notify the completion of an IO request
++ * @create_ioeventfd: Create a ioeventfd
++ * @create_irqfd: Create a irqfd
++ */
++struct virtio_backend_vm {
++    int fd;
++    int vm_fd;
++    uint64_t vm_id;
++    int irq;
++    uint64_t ram_addr;
++    uint64_t ram_size;
++    struct bao_virtio_request req;
++    int (*create)(struct virtio_backend_vm *self);
++    int (*destroy)(struct virtio_backend_vm *self);
++    int (*create_io_client)(struct virtio_backend_vm *self);
++    int (*destroy_io_client)(struct virtio_backend_vm *self);
++    int (*attach_io_client)(struct virtio_backend_vm *self);
++    int (*request_io)(struct virtio_backend_vm *self, struct bao_virtio_request *req);
++    int (*notify_io_completed)(struct virtio_backend_vm *self, struct bao_virtio_request *req);
++    int (*notify_guest)(struct virtio_backend_vm *self);
++    int (*create_ioeventfd)(struct virtio_backend_vm *self, struct bao_ioeventfd *ioeventfd);
++    int (*create_irqfd)(struct virtio_backend_vm *self, struct bao_irqfd *irqfd);
++};
++
++int bao_vm_backend_virtio_create(struct virtio_backend_vm *self);
++int bao_vm_backend_virtio_destroy(struct virtio_backend_vm *self);
++int bao_create_io_client(struct virtio_backend_vm *self);
++int bao_destroy_io_client(struct virtio_backend_vm *self);
++int bao_attach_io_client(struct virtio_backend_vm *self);
++int bao_request_io(struct virtio_backend_vm *self, struct bao_virtio_request *req);
++int bao_notify_io_completed(struct virtio_backend_vm *self, struct bao_virtio_request *req);
++int bao_notify_guest(struct virtio_backend_vm *self);
++int bao_create_ioeventfd(struct virtio_backend_vm *self, struct bao_ioeventfd *ioeventfd);
++int bao_create_irqfd(struct virtio_backend_vm *self, struct bao_irqfd *irqfd);
++struct virtio_backend_vm create_virtio_backend_vm(struct cmd_params params);
++
++int bao_vm_backend_virtio_create(struct virtio_backend_vm *self)
++{
++    if (self->fd < 0)
++    {
++        printf("ERROR: Failed to open Bao HSM device.\n");
++        return -1;
++    }
++    self->vm_fd = ioctl(self->fd, BAO_IOCTL_VM_VIRTIO_BACKEND_CREATE, &self->vm_id);
++    return self->vm_fd;
++}
++
++int bao_vm_backend_virtio_destroy(struct virtio_backend_vm *self)
++{
++    int rc = ioctl(self->fd, BAO_IOCTL_VM_VIRTIO_BACKEND_DESTROY, &self->vm_id);
++    self->vm_fd = -1;
++    close(self->fd);
++    return rc;
++}
++
++int bao_create_io_client(struct virtio_backend_vm *self)
++{
++    return ioctl(self->vm_fd, BAO_IOCTL_IO_CREATE_CLIENT);
++}
++
++int bao_destroy_io_client(struct virtio_backend_vm *self)
++{
++    return ioctl(self->vm_fd, BAO_IOCTL_IO_DESTROY_CLIENT);
++}
++
++int bao_attach_io_client(struct virtio_backend_vm *self)
++{
++    return ioctl(self->vm_fd, BAO_IOCTL_IO_ATTACH_CLIENT);
++}
++
++int bao_request_io(struct virtio_backend_vm *self, struct bao_virtio_request *req)
++{
++    return ioctl(self->vm_fd, BAO_IOCTL_IO_REQUEST, req);
++}
++
++int bao_notify_io_completed(struct virtio_backend_vm *self, struct bao_virtio_request *req)
++{
++    return ioctl(self->vm_fd, BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED, req);
++}
++
++int bao_notify_guest(struct virtio_backend_vm *self)
++{
++    return ioctl(self->vm_fd, BAO_IOCTL_IO_NOTIFY_GUEST);
++}
++
++int bao_create_ioeventfd(struct virtio_backend_vm *self, struct bao_ioeventfd *ioeventfd)
++{
++    return ioctl(self->vm_fd, BAO_IOCTL_IOEVENTFD, ioeventfd);
++}
++
++int bao_create_irqfd(struct virtio_backend_vm *self, struct bao_irqfd *irqfd)
++{
++    return ioctl(self->vm_fd, BAO_IOCTL_IRQFD, irqfd);
++}
++
++struct virtio_backend_vm create_virtio_backend_vm(struct cmd_params params)
++{
++    struct virtio_backend_vm vm;
++    vm.fd = open("/dev/bao", O_RDWR);
++    vm.vm_id = params.vm_id;
++    vm.vm_fd = -1;
++    vm.irq = params.irq;
++    vm.ram_addr = params.ram_addr;
++    vm.ram_size = params.ram_size;
++    vm.create = bao_vm_backend_virtio_create;
++    vm.destroy = bao_vm_backend_virtio_destroy;
++    vm.create_io_client = bao_create_io_client;
++    vm.destroy_io_client = bao_destroy_io_client;
++    vm.attach_io_client = bao_attach_io_client;
++    vm.request_io = bao_request_io;
++    vm.notify_io_completed = bao_notify_io_completed;
++    vm.notify_guest = bao_notify_guest;
++    vm.create_ioeventfd = bao_create_ioeventfd;
++    vm.create_irqfd = bao_create_irqfd;
++    vm.create(&vm);
++    return vm;
++}
++
++#endif // __BAO_IOREQ_API_H
+\ No newline at end of file
+diff --git a/accel/bao/meson.build b/accel/bao/meson.build
+new file mode 100644
+index 000000000..d3aa36eb7
+--- /dev/null
++++ b/accel/bao/meson.build
+@@ -0,0 +1 @@
++specific_ss.add(when: 'CONFIG_BAO', if_true: files('bao-all.c'))
+\ No newline at end of file
+diff --git a/accel/meson.build b/accel/meson.build
+index 49558dd23..44c7248fd 100644
+--- a/accel/meson.build
++++ b/accel/meson.build
+@@ -9,7 +9,8 @@ if have_system
+   subdir('kvm')
+   subdir('xen')
+   subdir('stubs')
++  subdir('bao')
+ endif
+ 
+ # qtest
+-softmmu_ss.add(files('dummy-cpus.c'))
++softmmu_ss.add(files('dummy-cpus.c'))
+\ No newline at end of file
+diff --git a/backends/hostmem-file.c b/backends/hostmem-file.c
+index 25141283c..f0fe1ede3 100644
+--- a/backends/hostmem-file.c
++++ b/backends/hostmem-file.c
+@@ -29,6 +29,7 @@ struct HostMemoryBackendFile {
+     uint64_t align;
+     bool discard_data;
+     bool is_pmem;
++    off_t offset;
+     bool readonly;
+ };
+ 
+@@ -58,7 +59,7 @@ file_backend_memory_alloc(HostMemoryBackend *backend, Error **errp)
+     ram_flags |= fb->is_pmem ? RAM_PMEM : 0;
+     memory_region_init_ram_from_file(&backend->mr, OBJECT(backend), name,
+                                      backend->size, fb->align, ram_flags,
+-                                     fb->mem_path, fb->readonly, errp);
++                                     fb->mem_path, fb->offset, fb->readonly, errp);
+     g_free(name);
+ #endif
+ }
+@@ -125,6 +126,36 @@ static void file_memory_backend_set_align(Object *o, Visitor *v,
+     fb->align = val;
+ }
+ 
++static void file_memory_backend_get_offset(Object *o, Visitor *v,
++                                          const char *name, void *opaque,
++                                          Error **errp)
++{
++    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(o);
++    uint64_t val = fb->offset;
++
++    visit_type_size(v, name, &val, errp);
++}
++
++static void file_memory_backend_set_offset(Object *o, Visitor *v,
++                                          const char *name, void *opaque,
++                                          Error **errp)
++{
++    HostMemoryBackend *backend = MEMORY_BACKEND(o);
++    HostMemoryBackendFile *fb = MEMORY_BACKEND_FILE(o);
++    uint64_t val;
++
++    if (host_memory_backend_mr_inited(backend)) {
++        error_setg(errp, "cannot change property '%s' of %s", name,
++                   object_get_typename(o));
++        return;
++    }
++
++    if (!visit_type_size(v, name, &val, errp)) {
++        return;
++    }
++    fb->offset = val;
++}
++
+ #ifdef CONFIG_LIBPMEM
+ static bool file_memory_backend_get_pmem(Object *o, Error **errp)
+ {
+@@ -201,6 +232,10 @@ file_backend_class_init(ObjectClass *oc, void *data)
+     object_class_property_add_bool(oc, "pmem",
+         file_memory_backend_get_pmem, file_memory_backend_set_pmem);
+ #endif
++    object_class_property_add(oc, "offset", "int",
++        file_memory_backend_get_offset,
++        file_memory_backend_set_offset,
++        NULL, NULL);
+     object_class_property_add_bool(oc, "readonly",
+         file_memory_backend_get_readonly,
+         file_memory_backend_set_readonly);
+diff --git a/backends/rng-random.c b/backends/rng-random.c
+index 80eb5be13..40ba00fd6 100644
+--- a/backends/rng-random.c
++++ b/backends/rng-random.c
+@@ -107,7 +107,6 @@ static void rng_random_set_filename(Object *obj, const char *filename,
+ static void rng_random_init(Object *obj)
+ {
+     RngRandom *s = RNG_RANDOM(obj);
+-
+     s->filename = g_strdup("/dev/urandom");
+     s->fd = -1;
+ }
+diff --git a/configs/devices/aarch64-softmmu/default.mak b/configs/devices/aarch64-softmmu/default.mak
+index cf43ac8da..37815d6e1 100644
+--- a/configs/devices/aarch64-softmmu/default.mak
++++ b/configs/devices/aarch64-softmmu/default.mak
+@@ -6,3 +6,4 @@ include ../arm-softmmu/default.mak
+ CONFIG_XLNX_ZYNQMP_ARM=y
+ CONFIG_XLNX_VERSAL=y
+ CONFIG_SBSA_REF=y
++CONFIG_BAO=y
+\ No newline at end of file
+diff --git a/configs/devices/aarch64-softmmu/minimal.mak b/configs/devices/aarch64-softmmu/minimal.mak
+index 0ebc1dca5..5d85a5565 100644
+--- a/configs/devices/aarch64-softmmu/minimal.mak
++++ b/configs/devices/aarch64-softmmu/minimal.mak
+@@ -7,3 +7,4 @@
+ 
+ CONFIG_ARM_VIRT=y
+ CONFIG_SBSA_REF=y
++CONFIG_BAO=y
+\ No newline at end of file
+diff --git a/hw/arm/meson.build b/hw/arm/meson.build
+index b545ba0e4..9196da33d 100644
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -1,5 +1,6 @@
+ arm_ss = ss.source_set()
+ arm_ss.add(files('boot.c'), fdt)
++arm_ss.add(when: 'CONFIG_ARM_VIRT', if_true: files('virt.c', 'virt-bao.c'))
+ arm_ss.add(when: 'CONFIG_ARM_VIRT', if_true: files('virt.c'))
+ arm_ss.add(when: 'CONFIG_ACPI', if_true: files('virt-acpi-build.c'))
+ arm_ss.add(when: 'CONFIG_DIGIC', if_true: files('digic_boards.c'))
+diff --git a/hw/arm/virt-bao.c b/hw/arm/virt-bao.c
+new file mode 100644
+index 000000000..da8533f6c
+--- /dev/null
++++ b/hw/arm/virt-bao.c
+@@ -0,0 +1,54 @@
++/*
++ * Bao Hypervisor Machine Memory Map
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "exec/address-spaces.h"
++#include "exec/memory.h"
++#include "hw/sysbus.h"
++#include "sysemu/bao.h"
++#include "hw/arm/virt-bao.h"
++#include "hw/pci/pcie_host.h"
++#include "hw/pci/pci.h"
++#include "net/net.h"
++
++/* Bao memory map */
++static MemMapEntry bao_memmap = {0, 0};
++
++void bao_virt_memmap_set(hwaddr base, hwaddr size)
++{
++    bao_memmap.base = base;
++    bao_memmap.size = size;
++}
++
++void bao_virt_memmap_init(VirtMachineState *vms)
++{
++    // check if the machine has a memory map field
++    if (!vms->memmap) {
++        fprintf(stderr, "No memmap set for machine\n");
++        exit(1);
++    }
++    // check if the memory map is valid
++    if (bao_memmap.size == 0) {
++        fprintf(stderr, "Invalid Bao memory map\n");
++        exit(1);
++    }
++
++    // verify if the memory map base address is >= 1GB
++    // base_memmap[VIRT_MEM] >= GiB (see /hw/arm/virt.c)
++    if (bao_memmap.base < 0x40000000) {
++        fprintf(stderr, "Bao memory map base address must be >= 1GB\n");
++        exit(1);
++    }
++
++    // update the memory map
++    vms->memmap[VIRT_MEM] = bao_memmap;
++}
+\ No newline at end of file
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index ac626b3be..195b36673 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -37,6 +37,7 @@
+ #include "hw/arm/boot.h"
+ #include "hw/arm/primecell.h"
+ #include "hw/arm/virt.h"
++#include "hw/arm/virt-bao.h"
+ #include "hw/block/flash.h"
+ #include "hw/vfio/vfio-calxeda-xgmac.h"
+ #include "hw/vfio/vfio-amd-xgbe.h"
+@@ -50,6 +51,7 @@
+ #include "sysemu/kvm.h"
+ #include "sysemu/hvf.h"
+ #include "sysemu/qtest.h"
++#include "sysemu/bao.h"
+ #include "hw/loader.h"
+ #include "qapi/error.h"
+ #include "qemu/bitops.h"
+@@ -847,6 +849,19 @@ static void create_gic(VirtMachineState *vms, MemoryRegion *mem)
+     }
+ }
+ 
++/**
++ * @brief Create a bao intc object
++ * @param vms the virtual machine state
++ */
++static void create_bao_intc(VirtMachineState *vms)
++{
++    vms->gic = qdev_new("bao-intc");
++    qdev_prop_set_uint32(vms->gic, "num-irqs", NUM_IRQS);
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(vms->gic), &error_fatal);
++
++    fdt_add_gic_node(vms);
++}
++
+ static void create_uart(const VirtMachineState *vms, int uart,
+                         MemoryRegion *mem, Chardev *chr)
+ {
+@@ -1768,6 +1783,10 @@ static void virt_set_memmap(VirtMachineState *vms, int pa_bits)
+         vms->memmap[i] = base_memmap[i];
+     }
+ 
++    if (bao_enabled()) {
++        bao_virt_memmap_init(vms);
++    }
++
+     if (ms->ram_slots > ACPI_MAX_RAM_SLOTS) {
+         error_report("unsupported number of memory slots: %"PRIu64,
+                      ms->ram_slots);
+@@ -1930,7 +1949,7 @@ static void finalize_gic_version(VirtMachineState *vms)
+         /* KVM w/o kernel irqchip can only deal with GICv2 */
+         gics_supported |= VIRT_GIC_VERSION_2_MASK;
+         accel_name = "KVM with kernel-irqchip=off";
+-    } else if (tcg_enabled() || hvf_enabled() || qtest_enabled())  {
++    } else if (tcg_enabled() || hvf_enabled() || qtest_enabled() || bao_enabled())  {
+         gics_supported |= VIRT_GIC_VERSION_2_MASK;
+         if (module_object_class_by_name("arm-gicv3")) {
+             gics_supported |= VIRT_GIC_VERSION_3_MASK;
+@@ -2265,7 +2284,11 @@ static void machvirt_init(MachineState *machine)
+ 
+     virt_flash_fdt(vms, sysmem, secure_sysmem ?: sysmem);
+ 
+-    create_gic(vms, sysmem);
++    if (bao_enabled()) {
++        create_bao_intc(vms);
++    } else {
++        create_gic(vms, sysmem);
++    }
+ 
+     virt_cpu_post_init(vms, sysmem);
+ 
+diff --git a/hw/intc/bao_intc.c b/hw/intc/bao_intc.c
+new file mode 100644
+index 000000000..542fa061f
+--- /dev/null
++++ b/hw/intc/bao_intc.c
+@@ -0,0 +1,89 @@
++/*
++ * Bao Hypervisor Interrupt Controller (INTC) for QEMU
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/module.h"
++#include "qom/object.h"
++#include "hw/sysbus.h"
++#include "qemu/log.h"
++#include "hw/qdev-properties.h"
++#include "gic_internal.h"
++#include "sysemu/bao.h"
++
++#define TYPE_BAO_INTC "bao-intc"
++OBJECT_DECLARE_SIMPLE_TYPE(BaoIntcState, BAO_INTC)
++
++struct BaoIntcState {
++    SysBusDevice parent_obj;
++
++    /* Number of external interrupts */
++    uint32_t num_irqs;
++};
++typedef struct BaoIntcState BaoIntcState;
++
++static void bao_intc_set_irq(void *opaque, int irq, int level)
++{
++    BaoIntcState *s = opaque;
++
++    /* Using following irq encoding for easier integration to arm-virt. 
++     * The encoding follows the ARM architecture and is similar to kvm-arm-gic:
++     *  [0..15]: SGIs (Software Generated Interrupts)
++     *  [16..31]: PPIs (Per processor Interrupts)
++     *  [32..N-1]: SPIs (Shared Processor Interrupts)
++     */
++    if (irq < s->num_irqs)
++        bao_set_irq(irq, level);
++    else
++        info_report("bao_intc: invalid irq [%d]\n", irq);
++}
++
++static void bao_intc_realize(DeviceState *dev, Error **errp)
++{
++    BaoIntcState *s = BAO_INTC(dev);
++
++    if (s->num_irqs > GIC_MAXIRQ) {
++        error_setg(errp,
++                   "requested %u interrupt lines exceeds GIC maximum %d",
++                   s->num_irqs, GIC_MAXIRQ);
++        return;
++    }
++
++    qdev_init_gpio_in(dev, bao_intc_set_irq, s->num_irqs);
++}
++
++static Property bao_intc_properties[] = {
++    DEFINE_PROP_UINT32("num-irqs", BaoIntcState, num_irqs, 192),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void bao_intc_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    device_class_set_props(dc, bao_intc_properties);
++
++    dc->realize = bao_intc_realize;
++}
++
++static const TypeInfo sel4_intc_info = {
++    .name = TYPE_BAO_INTC,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(BaoIntcState),
++    .class_init = bao_intc_class_init,
++};
++
++static void bao_intc_register_types(void)
++{
++    type_register_static(&sel4_intc_info);
++}
++
++type_init(bao_intc_register_types)
+diff --git a/hw/intc/meson.build b/hw/intc/meson.build
+index 8be459b41..23c6a13b6 100644
+--- a/hw/intc/meson.build
++++ b/hw/intc/meson.build
+@@ -31,6 +31,7 @@ softmmu_ss.add(when: 'CONFIG_XILINX', if_true: files('xilinx_intc.c'))
+ softmmu_ss.add(when: 'CONFIG_XLNX_ZYNQMP', if_true: files('xlnx-zynqmp-ipi.c'))
+ softmmu_ss.add(when: 'CONFIG_XLNX_ZYNQMP_PMU', if_true: files('xlnx-pmu-iomod-intc.c'))
+ 
++
+ if config_all_devices.has_key('CONFIG_APIC') or \
+    config_all_devices.has_key('CONFIG_I8259') or \
+    config_all_devices.has_key('CONFIG_MC146818RTC')
+@@ -42,6 +43,7 @@ specific_ss.add(when: 'CONFIG_ARM_GIC', if_true: files('arm_gicv3_cpuif_common.c
+ specific_ss.add(when: 'CONFIG_ARM_GICV3_TCG', if_true: files('arm_gicv3_cpuif.c'))
+ specific_ss.add(when: 'CONFIG_ARM_GIC_KVM', if_true: files('arm_gic_kvm.c'))
+ specific_ss.add(when: ['CONFIG_ARM_GIC_KVM', 'TARGET_AARCH64'], if_true: files('arm_gicv3_kvm.c', 'arm_gicv3_its_kvm.c'))
++specific_ss.add(when: 'CONFIG_BAO', if_true: files('bao_intc.c'))
+ specific_ss.add(when: 'CONFIG_ARM_V7M', if_true: files('armv7m_nvic.c'))
+ specific_ss.add(when: 'CONFIG_GRLIB', if_true: files('grlib_irqmp.c'))
+ specific_ss.add(when: 'CONFIG_IOAPIC', if_true: files('ioapic.c'))
+diff --git a/hw/virtio/vhost.c b/hw/virtio/vhost.c
+index 69a7b5592..b435132f7 100644
+--- a/hw/virtio/vhost.c
++++ b/hw/virtio/vhost.c
+@@ -28,6 +28,7 @@
+ #include "migration/qemu-file-types.h"
+ #include "sysemu/dma.h"
+ #include "trace.h"
++#include "sysemu/bao.h"
+ 
+ /* enabled until disconnected backend stabilizes */
+ #define _VHOST_DEBUG 1
+@@ -1201,6 +1202,13 @@ int vhost_virtqueue_start(struct vhost_dev *dev,
+     }
+ 
+     file.fd = event_notifier_get_fd(virtio_queue_get_host_notifier(vvq));
++
++    if (bao_enabled()) {
++        if (bao_set_irqfd(file.fd) < 0) {
++            info_report("bao_set_irqfd failed");
++        }
++    }
++
+     r = dev->vhost_ops->vhost_set_vring_kick(dev, &file);
+     if (r) {
+         VHOST_OPS_DEBUG(r, "vhost_set_vring_kick failed");
+diff --git a/hw/virtio/virtio-mmio.c b/hw/virtio/virtio-mmio.c
+index 23ba625eb..0870f0063 100644
+--- a/hw/virtio/virtio-mmio.c
++++ b/hw/virtio/virtio-mmio.c
+@@ -29,6 +29,7 @@
+ #include "qemu/host-utils.h"
+ #include "qemu/module.h"
+ #include "sysemu/kvm.h"
++#include "sysemu/bao.h"
+ #include "sysemu/replay.h"
+ #include "hw/virtio/virtio-mmio.h"
+ #include "qemu/error-report.h"
+@@ -764,6 +765,11 @@ static void virtio_mmio_realizefn(DeviceState *d, Error **errp)
+         proxy->flags &= ~VIRTIO_IOMMIO_FLAG_USE_IOEVENTFD;
+     }
+ 
++    /* use ioeventfds to boost overall performance */
++    if (bao_eventfds_enabled()) {
++        proxy->flags |= VIRTIO_IOMMIO_FLAG_USE_IOEVENTFD;
++    }
++
+     /* fd-based ioevents can't be synchronized in record/replay */
+     if (replay_mode != REPLAY_MODE_NONE) {
+         proxy->flags &= ~VIRTIO_IOMMIO_FLAG_USE_IOEVENTFD;
+diff --git a/hw/virtio/virtio.c b/hw/virtio/virtio.c
+index 98c4819fc..53a4f904e 100644
+--- a/hw/virtio/virtio.c
++++ b/hw/virtio/virtio.c
+@@ -235,7 +235,6 @@ static void virtio_init_region_cache(VirtIODevice *vdev, int n)
+     int64_t len;
+     bool packed;
+ 
+-
+     addr = vq->vring.desc;
+     if (!addr) {
+         goto out_no_cache;
+@@ -1747,7 +1746,6 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
+     trace_virtqueue_pop(vq, elem, elem->in_num, elem->out_num);
+ done:
+     address_space_cache_destroy(&indirect_desc_cache);
+-
+     return elem;
+ 
+ err_undo_map:
+diff --git a/include/exec/memory.h b/include/exec/memory.h
+index 15ade918b..24037b30e 100644
+--- a/include/exec/memory.h
++++ b/include/exec/memory.h
+@@ -1318,6 +1318,7 @@ void memory_region_init_resizeable_ram(MemoryRegion *mr,
+  * @ram_flags: RamBlock flags. Supported flags: RAM_SHARED, RAM_PMEM,
+  *             RAM_NORESERVE,
+  * @path: the path in which to allocate the RAM.
++ * @offset: offset within the file referenced by @path
+  * @readonly: true to open @path for reading, false for read/write.
+  * @errp: pointer to Error*, to store an error if it happens.
+  *
+@@ -1331,6 +1332,7 @@ void memory_region_init_ram_from_file(MemoryRegion *mr,
+                                       uint64_t align,
+                                       uint32_t ram_flags,
+                                       const char *path,
++                                      off_t offset,
+                                       bool readonly,
+                                       Error **errp);
+ 
+diff --git a/include/exec/ram_addr.h b/include/exec/ram_addr.h
+index f4fb6a211..abfa12839 100644
+--- a/include/exec/ram_addr.h
++++ b/include/exec/ram_addr.h
+@@ -110,6 +110,7 @@ long qemu_maxrampagesize(void);
+  *  @ram_flags: RamBlock flags. Supported flags: RAM_SHARED, RAM_PMEM,
+  *              RAM_NORESERVE.
+  *  @mem_path or @fd: specify the backing file or device
++ *  @offset: offset in @path or @fd to start the ram block
+  *  @readonly: true to open @path for reading, false for read/write.
+  *  @errp: pointer to Error*, to store an error if it happens
+  *
+@@ -119,7 +120,7 @@ long qemu_maxrampagesize(void);
+  */
+ RAMBlock *qemu_ram_alloc_from_file(ram_addr_t size, MemoryRegion *mr,
+                                    uint32_t ram_flags, const char *mem_path,
+-                                   bool readonly, Error **errp);
++                                   off_t offset, bool readonly, Error **errp);
+ RAMBlock *qemu_ram_alloc_from_fd(ram_addr_t size, MemoryRegion *mr,
+                                  uint32_t ram_flags, int fd, off_t offset,
+                                  bool readonly, Error **errp);
+diff --git a/include/hw/arm/virt-bao.h b/include/hw/arm/virt-bao.h
+new file mode 100644
+index 000000000..1bebb77b7
+--- /dev/null
++++ b/include/hw/arm/virt-bao.h
+@@ -0,0 +1,29 @@
++/*
++ * Bao Hypervisor Machine Memory Map
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef QEMU_ARM_BAO_VIRT_H
++#define QEMU_ARM_BAO_VIRT_H
++
++#include "hw/arm/virt.h"
++
++/**
++ * Updates the memory map for the Bao Hypervisor
++ */
++void bao_virt_memmap_init(VirtMachineState *vms);
++
++/**
++ * Sets the memory map for the Bao Hypervisor
++ * @base: the base address of the memory map
++ * @size: the size of the memory map
++ */
++void bao_virt_memmap_set(hwaddr base, hwaddr size);
++
++#endif
+\ No newline at end of file
+diff --git a/include/sysemu/bao.h b/include/sysemu/bao.h
+new file mode 100644
+index 000000000..b413b64a7
+--- /dev/null
++++ b/include/sysemu/bao.h
+@@ -0,0 +1,77 @@
++/*
++ * QEMU Bao support
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef BAO_H
++#define BAO_H
++
++#ifdef NEED_CPU_H
++#ifdef CONFIG_BAO
++#define CONFIG_BAO_IS_POSSIBLE
++#endif
++#else
++#define CONFIG_BAO_IS_POSSIBLE
++#endif
++
++#ifdef CONFIG_BAO_IS_POSSIBLE
++
++extern bool bao_allowed;
++
++/**
++ * bao_enabled:
++ *
++ * Returns: true if we can use Bao CPUs (ie the kernel supports
++ * Bao and we are running with a configuration where it is
++ * meaningful to use it).
++ */
++#define bao_enabled() (bao_allowed)
++
++/**
++ * bao_eventfds_enabled:
++ *
++ * Returns: true if we can use eventfds to receive notifications
++ * from a Bao CPU (ie the kernel supports eventds and we are running
++ * with a configuration where it is meaningful to use them).
++ */
++#define bao_eventfds_enabled() (true)
++
++/**
++ * bao_irqfds_enabled:
++ *
++ * Returns: true if we can use irqfds to inject interrupts into
++ * a Bao CPU (ie the kernel supports irqfds and we are running
++ * with a configuration where it is meaningful to use them).
++ */
++#define bao_irqfds_enabled() (false)
++
++/**
++ * Initialize the Bao Interrupt Controller (INTC)
++ */
++void bao_init_irq(void);
++
++/**
++ * Set or clear the specified interrupt
++ * @irq: the interrupt number
++ * @value: true to set the interrupt, false to clear it
++ *
++ */
++void bao_set_irq(int irq, bool value);
++
++int bao_set_irqfd(int fd);
++
++#else /* !CONFIG_BAO_IS_POSSIBLE */
++
++#define bao_enabled() (false)
++#define bao_eventfds_enabled() (false)
++#define bao_irqfds_enabled() (false)
++
++#endif /* CONFIG_BAO_IS_POSSIBLE */
++
++#endif /* BAO_H */
+\ No newline at end of file
+diff --git a/meson.build b/meson.build
+index 30447cfae..3f56d8c29 100644
+--- a/meson.build
++++ b/meson.build
+@@ -147,6 +147,12 @@ if cpu in ['x86', 'x86_64']
+   }
+ endif
+ 
++if cpu in ['aarch64']
++  accelerator_targets += {
++    'CONFIG_BAO': ['aarch64-softmmu']
++  }
++endif
++
+ modular_tcg = []
+ # Darwin does not support references to thread-local variables in modules
+ if targetos != 'darwin'
+@@ -421,6 +427,9 @@ accelerators = []
+ if get_option('kvm').allowed() and targetos == 'linux'
+   accelerators += 'CONFIG_KVM'
+ endif
++if not get_option('bao').disabled()
++  accelerators += 'CONFIG_BAO'
++endif
+ if get_option('whpx').allowed() and targetos == 'windows'
+   if get_option('whpx').enabled() and host_machine.cpu() != 'x86_64'
+     error('WHPX requires 64-bit host')
+@@ -3883,6 +3892,7 @@ endif
+ summary_info = {}
+ if have_system
+   summary_info += {'KVM support':       config_all.has_key('CONFIG_KVM')}
++  summary_info += {'Bao support':       config_all.has_key('CONFIG_BAO')}
+   summary_info += {'HAX support':       config_all.has_key('CONFIG_HAX')}
+   summary_info += {'HVF support':       config_all.has_key('CONFIG_HVF')}
+   summary_info += {'WHPX support':      config_all.has_key('CONFIG_WHPX')}
+diff --git a/meson_options.txt b/meson_options.txt
+index bc857fe68..dc0e04ff6 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -66,6 +66,8 @@ option('malloc', type : 'combo', choices : ['system', 'tcmalloc', 'jemalloc'],
+ 
+ option('kvm', type: 'feature', value: 'auto',
+        description: 'KVM acceleration support')
++option('bao', type: 'feature', value: 'auto',
++       description: 'Bao VirtIO Backend support')
+ option('hax', type: 'feature', value: 'auto',
+        description: 'HAX acceleration support')
+ option('whpx', type: 'feature', value: 'auto',
+diff --git a/qapi/qom.json b/qapi/qom.json
+index a877b879b..a90e770b2 100644
+--- a/qapi/qom.json
++++ b/qapi/qom.json
+@@ -658,6 +658,7 @@
+             '*discard-data': 'bool',
+             'mem-path': 'str',
+             '*pmem': { 'type': 'bool', 'if': 'CONFIG_LIBPMEM' },
++            '*offset': 'size',
+             '*readonly': 'bool' } }
+ 
+ ##
+diff --git a/qemu-options.hx b/qemu-options.hx
+index fdddfab6f..c0f1fdfae 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -26,7 +26,7 @@ DEF("machine", HAS_ARG, QEMU_OPTION_machine, \
+     "-machine [type=]name[,prop[=value][,...]]\n"
+     "                selects emulated machine ('-machine help' for list)\n"
+     "                property accel=accel1[:accel2[:...]] selects accelerator\n"
+-    "                supported accelerators are kvm, xen, hax, hvf, nvmm, whpx or tcg (default: tcg)\n"
++    "                supported accelerators are kvm, bao, xen, hax, hvf, nvmm, whpx or tcg (default: tcg)\n"
+     "                vmport=on|off|auto controls emulation of vmport (default: auto)\n"
+     "                dump-guest-core=on|off include guest memory in a core dump (default=on)\n"
+     "                mem-merge=on|off controls memory merge support (default: on)\n"
+@@ -59,7 +59,7 @@ SRST
+ 
+     ``accel=accels1[:accels2[:...]]``
+         This is used to enable an accelerator. Depending on the target
+-        architecture, kvm, xen, hax, hvf, nvmm, whpx or tcg can be available.
++        architecture, kvm, bao, xen, hax, hvf, nvmm, whpx or tcg can be available.
+         By default, tcg is used. If there is more than one accelerator
+         specified, the next one is used if the previous one fails to
+         initialize.
+@@ -178,7 +178,7 @@ ERST
+ 
+ DEF("accel", HAS_ARG, QEMU_OPTION_accel,
+     "-accel [accel=]accelerator[,prop[=value][,...]]\n"
+-    "                select accelerator (kvm, xen, hax, hvf, nvmm, whpx or tcg; use 'help' for a list)\n"
++    "                select accelerator (kvm, bao, xen, hax, hvf, nvmm, whpx or tcg; use 'help' for a list)\n"
+     "                igd-passthru=on|off (enable Xen integrated Intel graphics passthrough, default=off)\n"
+     "                kernel-irqchip=on|off|split controls accelerated irqchip support (default=on)\n"
+     "                kvm-shadow-mem=size of KVM shadow MMU in bytes\n"
+@@ -190,7 +190,7 @@ DEF("accel", HAS_ARG, QEMU_OPTION_accel,
+ SRST
+ ``-accel name[,prop=value[,...]]``
+     This is used to enable an accelerator. Depending on the target
+-    architecture, kvm, xen, hax, hvf, nvmm, whpx or tcg can be available. By
++    architecture, kvm, bao, xen, hax, hvf, nvmm, whpx or tcg can be available. By
+     default, tcg is used. If there is more than one accelerator
+     specified, the next one is used if the previous one fails to
+     initialize.
+@@ -4420,6 +4420,31 @@ SRST
+     load things like EtherBoot.
+ ERST
+ 
++DEF("bao", HAS_ARG, QEMU_OPTION_bao, \
++    "-bao [vm_id=id][,irq=irq][,ram_addr=ram][,ram_size=size]\n", QEMU_ARCH_ALL)
++SRST
++``-bao option[,option[,option[,...]]]``
++    Create a new VirtIO Backend VM instance.
++
++    ``-bao`` accepts all the following options:
++
++    ``vm_id=id``
++        This option defines the ID of the VirtIO Backend VM. Note
++        that this ID must be in accordance with the VirtIO ID 
++        specified in Bao configuration.
++
++    ``irq=irq``
++        This option defines the IRQ associated with the device.
++
++    ``ram_addr=ram``
++        This option defines the location where the respective VM 
++        instance will be mapped.
++    
++    ``ram_size=size``
++        This option defines the RAM size.
++    
++ERST
++
+ DEF("rtc", HAS_ARG, QEMU_OPTION_rtc, \
+     "-rtc [base=utc|localtime|<datetime>][,clock=host|rt|vm][,driftfix=none|slew]\n" \
+     "                set the RTC base and clock, enable drift fix for clock ticks (x86 only)\n",
+@@ -4891,7 +4916,7 @@ SRST
+     they are specified. Note that the 'id' property must be set. These
+     objects are placed in the '/objects' path.
+ 
+-    ``-object memory-backend-file,id=id,size=size,mem-path=dir,share=on|off,discard-data=on|off,merge=on|off,dump=on|off,prealloc=on|off,host-nodes=host-nodes,policy=default|preferred|bind|interleave,align=align,readonly=on|off``
++    ``-object memory-backend-file,id=id,size=size,mem-path=dir,share=on|off,discard-data=on|off,merge=on|off,dump=on|off,prealloc=on|off,host-nodes=host-nodes,policy=default|preferred|bind|interleave,align=align,offset=offset,readonly=on|off``
+         Creates a memory file backend object, which can be used to back
+         the guest RAM with huge pages.
+ 
+@@ -4961,6 +4986,9 @@ SRST
+         such cases, users can specify the required alignment via this
+         option.
+ 
++        The ``offset`` option specifies the offset when QEMU mmap(2)
++        ``mem-path``.
++
+         The ``pmem`` option specifies whether the backing file specified
+         by ``mem-path`` is in host persistent memory that can be
+         accessed using the SNIA NVM programming model (e.g. Intel
+diff --git a/scripts/meson-buildoptions.sh b/scripts/meson-buildoptions.sh
+index 30e1f2525..8db552784 100644
+--- a/scripts/meson-buildoptions.sh
++++ b/scripts/meson-buildoptions.sh
+@@ -75,6 +75,7 @@ meson_options_help() {
+   printf "%s\n" '  avx2            AVX2 optimizations'
+   printf "%s\n" '  avx512bw        AVX512BW optimizations'
+   printf "%s\n" '  avx512f         AVX512F optimizations'
++  printf "%s\n" '  bao             Bao VirtIO Backend support'
+   printf "%s\n" '  blkio           libblkio block device driver'
+   printf "%s\n" '  bochs           bochs image format support'
+   printf "%s\n" '  bpf             eBPF support'
+@@ -210,6 +211,8 @@ _meson_option_parse() {
+     --disable-gcov) printf "%s" -Db_coverage=false ;;
+     --enable-lto) printf "%s" -Db_lto=true ;;
+     --disable-lto) printf "%s" -Db_lto=false ;;
++    --enable-bao) printf "%s" -Dbao=enabled ;;
++    --disable-bao) printf "%s" -Dbao=disabled ;;
+     --enable-blkio) printf "%s" -Dblkio=enabled ;;
+     --disable-blkio) printf "%s" -Dblkio=disabled ;;
+     --block-drv-ro-whitelist=*) quote_sh "-Dblock_drv_ro_whitelist=$2" ;;
+diff --git a/setup.sh b/setup.sh
+new file mode 100644
+index 000000000..259450439
+--- /dev/null
++++ b/setup.sh
+@@ -0,0 +1,10 @@
++#!/bin/bash -e
++
++# QEMU Buildroot toolchain
++TOOLCHAIN="/home/joaopeixoto13/thesis/wrkdir/srcs/buildroot-aarch64-v6.5-backend/output/host/bin/aarch64-buildroot-linux-gnu-"
++
++# Configure QEMU
++./configure CROSS_COMPILE=$TOOLCHAIN ARCH="aarch64" --target-list=aarch64-softmmu --enable-slirp --enable-bao
++
++# Build QEMU
++#make -j8
+diff --git a/softmmu/memory.c b/softmmu/memory.c
+index b1a6cae6f..c51cc482d 100644
+--- a/softmmu/memory.c
++++ b/softmmu/memory.c
+@@ -1601,6 +1601,7 @@ void memory_region_init_ram_from_file(MemoryRegion *mr,
+                                       uint64_t align,
+                                       uint32_t ram_flags,
+                                       const char *path,
++                                      off_t offset,
+                                       bool readonly,
+                                       Error **errp)
+ {
+@@ -1612,7 +1613,7 @@ void memory_region_init_ram_from_file(MemoryRegion *mr,
+     mr->destructor = memory_region_destructor_ram;
+     mr->align = align;
+     mr->ram_block = qemu_ram_alloc_from_file(size, mr, ram_flags, path,
+-                                             readonly, &err);
++                                             offset, readonly, &err);
+     if (err) {
+         mr->size = int128_zero();
+         object_unparent(OBJECT(mr));
+diff --git a/softmmu/physmem.c b/softmmu/physmem.c
+index 0e0182d9f..f602e0beb 100644
+--- a/softmmu/physmem.c
++++ b/softmmu/physmem.c
+@@ -1923,13 +1923,12 @@ RAMBlock *qemu_ram_alloc_from_fd(ram_addr_t size, MemoryRegion *mr,
+         return NULL;
+     }
+     return new_block;
+-
+ }
+ 
+ 
+ RAMBlock *qemu_ram_alloc_from_file(ram_addr_t size, MemoryRegion *mr,
+                                    uint32_t ram_flags, const char *mem_path,
+-                                   bool readonly, Error **errp)
++                                   off_t offset, bool readonly, Error **errp)
+ {
+     int fd;
+     bool created;
+@@ -1941,7 +1940,7 @@ RAMBlock *qemu_ram_alloc_from_file(ram_addr_t size, MemoryRegion *mr,
+         return NULL;
+     }
+ 
+-    block = qemu_ram_alloc_from_fd(size, mr, ram_flags, fd, 0, readonly, errp);
++    block = qemu_ram_alloc_from_fd(size, mr, ram_flags, fd, offset, readonly, errp);
+     if (!block) {
+         if (created) {
+             unlink(mem_path);
+diff --git a/softmmu/vl.c b/softmmu/vl.c
+index ea20b23e4..a5fa59588 100644
+--- a/softmmu/vl.c
++++ b/softmmu/vl.c
+@@ -87,6 +87,7 @@
+ #include "migration/postcopy-ram.h"
+ #include "sysemu/kvm.h"
+ #include "sysemu/hax.h"
++#include "sysemu/bao.h"
+ #include "qapi/qobject-input-visitor.h"
+ #include "qemu/option.h"
+ #include "qemu/config-file.h"
+@@ -217,6 +218,28 @@ static struct {
+     { .driver = "virtio-vga-gl",        .flag = &default_vga       },
+ };
+ 
++static QemuOptsList qemu_bao_opts = {
++    .name = "bao",
++    .head = QTAILQ_HEAD_INITIALIZER(qemu_bao_opts.head),
++    .merge_lists = true,
++    .desc = {
++        {
++            .name = "vm_id",
++            .type = QEMU_OPT_STRING,
++        },{
++            .name = "irq",
++            .type = QEMU_OPT_STRING,
++        },{
++            .name = "ram_addr",
++            .type = QEMU_OPT_STRING,
++        },{
++            .name = "ram_size",
++            .type = QEMU_OPT_STRING,
++        },
++        { /* end of list */ }
++    },
++};
++
+ static QemuOptsList qemu_rtc_opts = {
+     .name = "rtc",
+     .head = QTAILQ_HEAD_INITIALIZER(qemu_rtc_opts.head),
+@@ -2652,6 +2675,7 @@ void qemu_init(int argc, char **argv)
+     qemu_add_opts(&qemu_netdev_opts);
+     qemu_add_opts(&qemu_nic_opts);
+     qemu_add_opts(&qemu_net_opts);
++    qemu_add_opts(&qemu_bao_opts);
+     qemu_add_opts(&qemu_rtc_opts);
+     qemu_add_opts(&qemu_global_opts);
+     qemu_add_opts(&qemu_mon_opts);
+@@ -3334,6 +3358,18 @@ void qemu_init(int argc, char **argv)
+             case QEMU_OPTION_old_param:
+                 old_param = 1;
+                 break;
++            case QEMU_OPTION_bao:
++                if (!accel_find("bao")) {
++                    error_report("Option not supported for this target");
++                    exit(1);
++                }
++                opts = qemu_opts_parse_noisily(qemu_find_opts("bao"), optarg,
++                                               false);
++                if (!opts) {
++                    error_report("failed to parse -bao option");
++                    exit(1);
++                }
++                break;
+             case QEMU_OPTION_rtc:
+                 opts = qemu_opts_parse_noisily(qemu_find_opts("rtc"), optarg,
+                                                false);
+diff --git a/target/arm/cpu.c b/target/arm/cpu.c
+index 5182ed0c9..532812389 100644
+--- a/target/arm/cpu.c
++++ b/target/arm/cpu.c
+@@ -42,6 +42,7 @@
+ #endif /* !CONFIG_USER_ONLY */
+ #include "sysemu/tcg.h"
+ #include "sysemu/qtest.h"
++#include "sysemu/bao.h"
+ #include "sysemu/hw_accel.h"
+ #include "kvm_arm.h"
+ #include "disas/capstone.h"
+@@ -1592,7 +1593,7 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
+         }
+     }
+ 
+-    if (!tcg_enabled() && !qtest_enabled()) {
++    if (!tcg_enabled() && !qtest_enabled() && !bao_enabled()) {
+         /*
+          * We assume that no accelerator except TCG (and the "not really an
+          * accelerator" qtest) can handle these features, because Arm hardware
+diff --git a/util/mmap-alloc.c b/util/mmap-alloc.c
+index 5ed7d2918..58416d54b 100644
+--- a/util/mmap-alloc.c
++++ b/util/mmap-alloc.c
+@@ -178,6 +178,7 @@ static void *mmap_activate(void *ptr, size_t size, int fd,
+ 
+     activated_ptr = mmap(ptr, size, prot, flags | map_sync_flags, fd,
+                          map_offset);
++
+     if (activated_ptr == MAP_FAILED && map_sync_flags) {
+         if (errno == ENOTSUP) {
+             char *proc_link = g_strdup_printf("/proc/self/fd/%d", fd);

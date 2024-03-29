@@ -1,0 +1,73 @@
+From b3d01ca06953ee638ea4e9b3bfa43c037246399c Mon Sep 17 00:00:00 2001
+From: Jose Martins <josemartins90@gmail.com>
+Date: Mon, 31 Jul 2023 12:13:59 +0100
+Subject: [PATCH] arm/virt: add two more uarts
+
+Signed-off-by: Jose Martins <josemartins90@gmail.com>
+---
+ hw/arm/virt.c         | 12 ++++++++++--
+ include/hw/arm/virt.h |  2 ++
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 7d9dbc2663..7b6c03d55f 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -145,6 +145,8 @@ static const MemMapEntry base_memmap[] = {
+     /* This redistributor space allows up to 2*64kB*123 CPUs */
+     [VIRT_GIC_REDIST] =         { 0x080A0000, 0x00F60000 },
+     [VIRT_UART] =               { 0x09000000, 0x00001000 },
++    [VIRT_UART1] =              { 0x09001000, 0x00001000 },
++    [VIRT_UART2] =              { 0x09002000, 0x00001000 },
+     [VIRT_RTC] =                { 0x09010000, 0x00001000 },
+     [VIRT_FW_CFG] =             { 0x09020000, 0x00000018 },
+     [VIRT_GPIO] =               { 0x09030000, 0x00001000 },
+@@ -197,6 +199,8 @@ static const int a15irqmap[] = {
+     [VIRT_GPIO] = 7,
+     [VIRT_SECURE_UART] = 8,
+     [VIRT_ACPI_GED] = 9,
++    [VIRT_UART1] = 10,
++    [VIRT_UART2] = 11,
+     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
+     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
+     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
+@@ -884,7 +888,7 @@ static void create_uart(const VirtMachineState *vms, int uart,
+     qemu_fdt_setprop(ms->fdt, nodename, "clock-names",
+                          clocknames, sizeof(clocknames));
+ 
+-    if (uart == VIRT_UART) {
++    if (uart == VIRT_UART || uart == VIRT_UART1 || uart == VIRT_UART2) {
+         qemu_fdt_setprop_string(ms->fdt, "/chosen", "stdout-path", nodename);
+     } else {
+         /* Mark as not usable by the normal world */
+@@ -2264,9 +2268,13 @@ static void machvirt_init(MachineState *machine)
+ 
+     create_uart(vms, VIRT_UART, sysmem, serial_hd(0));
+ 
++    create_uart(vms, VIRT_UART1, sysmem, serial_hd(1));
++    
++    create_uart(vms, VIRT_UART2, sysmem, serial_hd(2));
++
+     if (vms->secure) {
+         create_secure_ram(vms, secure_sysmem, secure_tag_sysmem);
+-        create_uart(vms, VIRT_SECURE_UART, secure_sysmem, serial_hd(1));
++        create_uart(vms, VIRT_SECURE_UART, secure_sysmem, serial_hd(3));
+     }
+ 
+     if (tag_sysmem) {
+diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
+index e1ddbea96b..417b53e365 100644
+--- a/include/hw/arm/virt.h
++++ b/include/hw/arm/virt.h
+@@ -70,6 +70,8 @@ enum {
+     VIRT_GIC_REDIST,
+     VIRT_SMMU,
+     VIRT_UART,
++    VIRT_UART1,
++    VIRT_UART2,
+     VIRT_MMIO,
+     VIRT_RTC,
+     VIRT_FW_CFG,
+-- 
+2.34.1
+

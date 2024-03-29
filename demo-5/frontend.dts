@@ -1,0 +1,121 @@
+/dts-v1/;
+
+/ {
+	#address-cells = <0x2>;
+	#size-cells = <0x2>;
+	interrupt-parent = <&gic>;
+
+	cpus {
+		#size-cells = <0x0>;
+		#address-cells = <0x1>;
+
+		cpu@0 {
+			compatible = "arm,cortex-a53", "arm,armv8";
+			device_type = "cpu";
+			enable-method = "psci";
+			reg = <0x0>;
+		};
+	};
+
+	psci {
+		compatible = "arm,psci-0.2";
+		method = "smc";
+	};
+
+	memory@10000000 {
+		device_type = "memory";
+		reg = <0x0 0x10000000 0x0 0x40000000
+			   0x0 0x80000000 0x0 0x01000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <0x2>;
+		#size-cells = <0x2>;
+		ranges;
+	
+		reserved: buffer@80000000 {
+		    compatible = "restricted-dma-pool";			// Uses SWIOTLB to bounce the buffers
+		    reg = <0x0 0x80000000 0x0 0x1000000>;
+		};
+    };
+
+	gic: interrupt-controller@f9010000 {
+		compatible = "arm,gic-400", "arm,cortex-a15-gic";
+		#interrupt-cells = <0x3>;
+		reg = <0x0 0xf9010000 0x0 0x10000 0x0 0xf9020000 0x0 0x20000 0x0 0xf9040000 0x0 0x20000 0x0 0xf9060000 0x0 0x20000>;
+		interrupt-controller;
+		interrupt-parent = <0x4>;
+		interrupts = <0x1 0x9 0xf04>;
+	};
+
+	virtio@a003e00 {
+		dma-coherent;
+		interrupts = <0x0 0x2f 0x1>;
+		reg = <0x0 0xa003e00 0x0 0x200>;
+		compatible = "virtio,mmio";
+		memory-region = <&reserved>;	// Limit the virtio device to access only this particular memory region
+	};
+
+	timer {
+		compatible = "arm,armv8-timer";
+		always-on;
+		interrupts = <0x1 0xd 0xf08 0x1 0xe 0xf08 0x1 0xb 0xf08 0x1 0xa 0xf08>;
+	};
+
+
+	uartclk: uartclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0x0>;
+		clock-frequency = <100000000>;
+		phandle = <0x1>;
+	};
+
+	amba {
+		compatible = "simple-bus";
+		#address-cells = <0x2>;
+		#size-cells = <0x2>;
+		ranges;
+
+		serial@ff010000 {
+			u-boot,dm-pre-reloc;
+			compatible = "cdns,uart-r1p12", "xlnx,xuartps";
+			status = "okay";
+			interrupts = <0x0 0x16 0x4>;
+			reg = <0x0 0xff010000 0x0 0x1000>;
+			clock-names = "uart_clk", "pclk";
+			clocks = <&uartclk &uartclk>;
+		};
+
+		zynqmp_phy@fd400000 {
+			compatible = "xlnx,zynqmp-psgtr-v1.1";
+			status = "disabled";
+			reg = <0x0 0xfd400000 0x0 0x40000 0x0 0xfd3d0000 0x0 0x1000>;
+			reg-names = "serdes", "siou";
+
+			lane0 {
+				#phy-cells = <0x4>;
+			};
+
+			lane1 {
+				#phy-cells = <0x4>;
+			};
+
+			lane2 {
+				#phy-cells = <0x4>;
+			};
+
+			lane3 {
+				#phy-cells = <0x4>;
+			};
+		};
+	};
+
+	aliases {
+		serial0 = "/amba/serial@ff010000";
+	};
+
+	chosen {
+		bootargs = "earlycon console=ttyPS0,115200n8 clk_ignore_unused ip=192.168.42.16 carrier_timeout=0";
+		stdout-path = "serial0:115200n8";
+	};
+};

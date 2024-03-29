@@ -1,0 +1,3164 @@
+Signed-off-by: João Peixoto <joaopeixotooficial@gmail.com>
+
+diff --git a/Documentation/userspace-api/ioctl/ioctl-number.rst b/Documentation/userspace-api/ioctl/ioctl-number.rst
+index 4ea5b8373..a157b9e3b 100644
+--- a/Documentation/userspace-api/ioctl/ioctl-number.rst
++++ b/Documentation/userspace-api/ioctl/ioctl-number.rst
+@@ -334,6 +334,7 @@ Code  Seq#    Include File                                           Comments
+                                                                      <mailto:luzmaximilian@gmail.com>
+ 0xA5  20-2F  linux/surface_aggregator/dtx.h                          Microsoft Surface DTX driver
+                                                                      <mailto:luzmaximilian@gmail.com>
++0xA6  all    uapi/linux/bao.h                                        Bao hypervisor
+ 0xAA  00-3F  linux/uapi/linux/userfaultfd.h
+ 0xAB  00-1F  linux/nbd.h
+ 0xAC  00-1F  linux/raw.h
+diff --git a/arch/arm/include/asm/bao.h b/arch/arm/include/asm/bao.h
+new file mode 100644
+index 000000000..595a211fb
+--- /dev/null
++++ b/arch/arm/include/asm/bao.h
+@@ -0,0 +1,69 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Hypercall for Bao Hypervisor on ARM
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef __ASM_ARM_BAO_H
++#define __ASM_ARM_BAO_H
++
++#include <asm/bao.h>
++#include <linux/bao.h>
++#include <linux/arm-smccc.h>
++
++/**
++ * asm_bao_virtio_hypercall() - Performs a VirtIO Hypercall
++ * @virtio_hc_id: VirtIO Hypercall ID
++ * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
++ * @reg_off: Gives the offset of the MMIO Register that was accessed
++ * @addr: Address of the I/O range
++ * @op:	Write, Read, Ask or Notify operation
++ * @value: Value to write or read
++ * @cpu_id: CPU ID
++ * @vcpu_id: VCPU ID
++ *
++ * Returns: The VirtIO request structure
++ */
++static inline struct bao_virtio_request asm_bao_virtio_hypercall(u64 virtio_hc_id,
++							  u64 virtio_id,
++							  u64 reg_off, u64 addr,
++							  u64 op, u64 value, u64 cpu_id, u64 vcpu_id)
++{
++	register u32 x0 asm("r0") = ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,
++                ARM_SMCCC_SMC_64, ARM_SMCCC_OWNER_VENDOR_HYP, virtio_hc_id);
++	register u32 x1 asm("r1") = virtio_hc_id;
++	register u32 x2 asm("r2") = virtio_id;
++	register u32 x3 asm("r3") = reg_off;
++	register u32 x4 asm("r4") = addr;
++	register u32 x5 asm("r5") = op;
++	register u32 x6 asm("r6") = value;
++	register u32 x7 asm("r7") = cpu_id;
++	register u32 x8 asm("r8") = vcpu_id;
++
++	struct bao_virtio_request ret;
++
++	asm volatile("hvc 0\n\t"
++		     : "=r"(x0), "=r"(x1), "=r"(x2), "=r"(x3), "=r"(x4),
++		       "=r"(x5), "=r"(x6), "=r"(x7), "=r"(x8)
++		     : "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5),
++		       "r"(x6), "r"(x7), "r"(x8)
++		     : "memory");
++
++	ret.ret = x0;
++	ret.virtio_id = x1;
++	ret.reg_off = x2;
++	ret.addr = x3;
++	ret.op = x4;
++	ret.value = x5;
++	ret.access_width = x6;
++	ret.cpu_id = x7;
++	ret.vcpu_id = x8;
++
++	return ret;
++}
++
++#endif /* __ASM_ARM_BAO_H */
+\ No newline at end of file
+diff --git a/arch/arm64/include/asm/bao.h b/arch/arm64/include/asm/bao.h
+new file mode 100644
+index 000000000..94c07f262
+--- /dev/null
++++ b/arch/arm64/include/asm/bao.h
+@@ -0,0 +1,69 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Hypercall for Bao Hypervisor on ARM64
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef __ASM_ARM64_BAO_H
++#define __ASM_ARM64_BAO_H
++
++#include <asm/bao.h>
++#include <linux/bao.h>
++#include <linux/arm-smccc.h>
++
++/**
++ * asm_bao_virtio_hypercall() - Performs a VirtIO Hypercall
++ * @virtio_hc_id: VirtIO Hypercall ID
++ * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
++ * @reg_off: Gives the offset of the MMIO Register that was accessed
++ * @addr: Address of the I/O range
++ * @op:	Write, Read, Ask or Notify operation
++ * @value: Value to write or read
++ * @cpu_id: CPU ID
++ * @vcpu_id: VCPU ID
++ *
++ * Returns: The VirtIO request structure
++ */
++static inline struct bao_virtio_request asm_bao_virtio_hypercall(u64 virtio_hc_id,
++							  u64 virtio_id,
++							  u64 reg_off, u64 addr,
++							  u64 op, u64 value, u64 cpu_id, u64 vcpu_id)
++{
++	register u64 x0 asm("x0") = ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,
++                ARM_SMCCC_SMC_64, ARM_SMCCC_OWNER_VENDOR_HYP, virtio_hc_id);
++	register u64 x1 asm("x1") = virtio_hc_id;
++	register u64 x2 asm("x2") = virtio_id;
++	register u64 x3 asm("x3") = reg_off;
++	register u64 x4 asm("x4") = addr;
++	register u64 x5 asm("x5") = op;
++	register u64 x6 asm("x6") = value;
++	register u64 x7 asm("x7") = cpu_id;
++	register u64 x8 asm("x8") = vcpu_id;
++
++	struct bao_virtio_request ret;
++
++	asm volatile("hvc 0\n\t"
++		     : "=r"(x0), "=r"(x1), "=r"(x2), "=r"(x3), "=r"(x4),
++		       "=r"(x5), "=r"(x6), "=r"(x7), "=r"(x8)
++		     : "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5),
++		       "r"(x6), "r"(x7), "r"(x8)
++		     : "memory");
++
++	ret.ret = x0;
++	ret.virtio_id = x1;
++	ret.reg_off = x2;
++	ret.addr = x3;
++	ret.op = x4;
++	ret.value = x5;
++	ret.access_width = x6;
++	ret.cpu_id = x7;
++	ret.vcpu_id = x8;
++
++	return ret;
++}
++
++#endif /* __ASM_ARM64_BAO_H */
+\ No newline at end of file
+diff --git a/arch/riscv/include/asm/bao.h b/arch/riscv/include/asm/bao.h
+new file mode 100644
+index 000000000..85b96ca7f
+--- /dev/null
++++ b/arch/riscv/include/asm/bao.h
+@@ -0,0 +1,65 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Hypercall for Bao Hypervisor on RISC-V
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef __ASM_RISCV_BAO_H
++#define __ASM_RISCV_BAO_H
++
++#include <asm/sbi.h>
++#include <linux/bao.h>
++
++/**
++ * asm_bao_virtio_hypercall() - Performs a VirtIO Hypercall
++ * @virtio_hc_id: VirtIO Hypercall ID
++ * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
++ * @reg_off: Gives the offset of the MMIO Register that was accessed
++ * @addr: Address of the I/O range
++ * @op:	Write, Read, Ask or Notify operation
++ * @value: Value to write or read
++ * @cpu_id: CPU ID
++ * @vcpu_id: VCPU ID
++ *
++ * Returns: The VirtIO request structure
++ */
++static inline struct bao_virtio_request asm_bao_virtio_hypercall(u64 virtio_hc_id,
++							  u64 virtio_id,
++							  u64 reg_off, u64 addr,
++							  u64 op, u64 value, u64 cpu_id, u64 vcpu_id)
++{
++    struct bao_virtio_request ret;
++
++	register uintptr_t a0 asm ("a0") = (uintptr_t)(0x08000ba0);
++	register uintptr_t a1 asm ("a1") = (uintptr_t)(virtio_hc_id);
++	register uintptr_t a2 asm ("a2") = (uintptr_t)(virtio_id);
++	register uintptr_t a3 asm ("a3") = (uintptr_t)(reg_off);
++	register uintptr_t a4 asm ("a4") = (uintptr_t)(addr);
++	register uintptr_t a5 asm ("a5") = (uintptr_t)(op);
++	register uintptr_t a6 asm ("a6") = (uintptr_t)(value);
++	register uintptr_t a7 asm ("a7") = (uintptr_t)(cpu_id);
++	register uintptr_t a8 asm ("a8") = (uintptr_t)(vcpu_id);
++	
++    asm volatile ("ecall"
++		      : "+r" (a0), "+r" (a1), "+r" (a2), "+r" (a3), "+r" (a4), "+r" (a5), "+r" (a6), "+r" (a7), "+r" (a8)
++		      : "r" (a0), "r" (a1), "r" (a2), "r" (a3), "r" (a4), "r" (a5), "r" (a6), "r" (a7), "r" (a8)
++		      : "memory");
++	
++	ret.ret = a0;
++	ret.virtio_id = a1;
++	ret.reg_off = a2;
++	ret.addr = a3;
++	ret.op = a4;
++	ret.value = a5;
++	ret.access_width = a6;
++	ret.cpu_id = a7;
++	ret.vcpu_id = a8;
++
++	return ret;
++}
++
++#endif /* __ASM_RISCV_BAO_H */
+\ No newline at end of file
+diff --git a/drivers/Kconfig b/drivers/Kconfig
+index 514ae6b24..c5967bc34 100644
+--- a/drivers/Kconfig
++++ b/drivers/Kconfig
+@@ -241,6 +241,8 @@ source "drivers/peci/Kconfig"
+ 
+ source "drivers/hte/Kconfig"
+ 
++source "drivers/bao/Kconfig"
++
+ source "drivers/cdx/Kconfig"
+ 
+ endmenu
+diff --git a/drivers/Makefile b/drivers/Makefile
+index 7241d80a7..af05a1a4a 100644
+--- a/drivers/Makefile
++++ b/drivers/Makefile
+@@ -193,5 +193,6 @@ obj-$(CONFIG_COUNTER)		+= counter/
+ obj-$(CONFIG_MOST)		+= most/
+ obj-$(CONFIG_PECI)		+= peci/
+ obj-$(CONFIG_HTE)		+= hte/
++obj-$(CONFIG_BAO_SHMEM) += bao/
+ obj-$(CONFIG_DRM_ACCEL)		+= accel/
+ obj-$(CONFIG_CDX_BUS)		+= cdx/
+diff --git a/drivers/bao/Kconfig b/drivers/bao/Kconfig
+new file mode 100644
+index 000000000..c99d163eb
+--- /dev/null
++++ b/drivers/bao/Kconfig
+@@ -0,0 +1,5 @@
++config BAO_SHMEM
++	tristate "Bao shared memory support"
++
++	help
++	  This implements an interface to communicate with bao hosted guests.
+\ No newline at end of file
+diff --git a/drivers/bao/Makefile b/drivers/bao/Makefile
+new file mode 100644
+index 000000000..d35c18fd3
+--- /dev/null
++++ b/drivers/bao/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0
++obj-$(CONFIG_BAO_SHMEM) += bao.o
++bao-objs += bao-ipcshmem.o
+\ No newline at end of file
+diff --git a/drivers/bao/bao-ipcshmem.c b/drivers/bao/bao-ipcshmem.c
+new file mode 100644
+index 000000000..ccd8696e6
+--- /dev/null
++++ b/drivers/bao/bao-ipcshmem.c
+@@ -0,0 +1,332 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Bao Hypervisor IPC Through Shared-memory Sample Driver
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Authors:
++ *	David Cerdeira and José Martins
++ */
++
++#include <linux/types.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/uaccess.h>
++#include <linux/fs.h>
++#include <linux/io.h>
++#include <linux/ioport.h>
++#include <linux/interrupt.h>
++#include <linux/of.h>
++#include <asm/io.h>
++#include <linux/mutex.h>
++#include <linux/poll.h>
++#include <linux/platform_device.h>
++#include <linux/ioctl.h>
++#include <linux/cdev.h>
++#include <linux/device.h>
++#include <linux/spinlock.h>
++#include <linux/mutex.h>
++#include <linux/wait.h>
++#include <linux/mm.h>
++
++#if defined(CONFIG_ARM64) || defined(CONFIG_ARM)
++#include <linux/arm-smccc.h>
++#include <asm/memory.h>
++#elif CONFIG_RISCV
++#include <asm/sbi.h>
++#endif
++
++#define DEV_NAME "baoipc"
++#define MAX_DEVICES 16
++#define NAME_LEN 32
++
++static dev_t bao_ipcshmem_devt;
++struct class *cl;
++
++struct bao_ipcshmem
++{
++    struct cdev cdev;
++    struct device *dev;
++
++    int id;
++    char label[NAME_LEN];
++    void* read_base;
++    size_t read_size;
++    void* write_base;
++    size_t write_size;
++    void* physical_base;
++    size_t shmem_size;
++};
++
++#ifdef CONFIG_ARM64
++static uint64_t bao_ipcshmem_notify(struct bao_ipcshmem *dev) {
++    register uint64_t x0 asm("x0") = ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,
++                ARM_SMCCC_SMC_64, ARM_SMCCC_OWNER_VENDOR_HYP, 1);
++    register uint64_t x1 asm("x1") = dev->id;
++    register uint64_t x2 asm("x2") = 0;
++
++    asm volatile(
++        "hvc 0\t\n"
++        : "=r"(x0)
++        : "r"(x0), "r"(x1), "r"(x2)
++    );
++
++    return x0;
++}
++#elif CONFIG_ARM
++static uint32_t bao_ipcshmem_notify(struct bao_ipcshmem *dev) {
++    register uint32_t r0 asm("r0") = ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,
++                ARM_SMCCC_SMC_32, ARM_SMCCC_OWNER_VENDOR_HYP, 1);
++    register uint32_t r1 asm("r1") = dev->id;
++    register uint32_t r2 asm("r2") = 0;
++
++    asm volatile(
++        "hvc #0\t\n"
++        : "=r"(r0)
++        : "r"(r0), "r"(r1), "r"(r2)
++    );
++
++    return r0;
++}
++#elif CONFIG_RISCV
++static uint64_t bao_ipcshmem_notify(struct bao_ipcshmem *dev) {
++
++	struct sbiret ret =
++		sbi_ecall(0x08000ba0, 1, dev->id, 0, 0, 0, 0, 0);
++
++	return ret.error;
++}
++#endif
++
++static int bao_ipcshmem_mmap_fops(struct file *filp, struct vm_area_struct *vma)
++{
++    struct bao_ipcshmem *bao = filp->private_data;
++
++    unsigned long vsize = vma->vm_end - vma->vm_start;
++
++    if (remap_pfn_range(vma, vma->vm_start,
++            (unsigned long)bao->physical_base >> PAGE_SHIFT, vsize,
++            vma->vm_page_prot)) {
++        return -EFAULT;
++    }
++
++    return 0;
++}
++
++static ssize_t bao_ipcshmem_read_fops(struct file *filp,
++                           char *buf, size_t count, loff_t *ppos)
++{
++    struct bao_ipcshmem *bao_ipcshmem = filp->private_data;
++    unsigned long missing = 0;
++    size_t len = 0;
++
++    len = strnlen(bao_ipcshmem->read_base, bao_ipcshmem->read_size);
++
++    if (*ppos >= len) return 0;
++    if ((len - *ppos) < count) count = len - *ppos;
++
++    missing =
++        copy_to_user(buf, bao_ipcshmem->read_base + *ppos, count);
++    if(missing != 0) count = count - missing;
++    *ppos += count;
++
++    return count;
++}
++
++static ssize_t bao_ipcshmem_write_fops(struct file *filp,
++                            const char *buf, size_t count, loff_t *ppos)
++{
++    struct bao_ipcshmem *bao_ipcshmem = filp->private_data;
++    unsigned long missing = 0;
++
++    if (*ppos >= bao_ipcshmem->write_size)
++        return 0;
++    if(count > bao_ipcshmem->write_size)
++        count = bao_ipcshmem->write_size;
++    if((*ppos + count) > bao_ipcshmem->write_size)
++        count = bao_ipcshmem->write_size - *ppos;
++
++    missing =
++        copy_from_user(bao_ipcshmem->write_base + *ppos, buf, count);
++    if (missing != 0) count = count - missing;
++    *ppos += count;
++
++    bao_ipcshmem_notify(bao_ipcshmem);
++
++    return count;
++}
++
++static int bao_ipcshmem_open_fops(struct inode *inode, struct file *filp)
++{
++    struct bao_ipcshmem *bao_ipcshmem = container_of(inode->i_cdev,
++                                             struct bao_ipcshmem, cdev);
++    filp->private_data = bao_ipcshmem;
++
++    kobject_get(&bao_ipcshmem->dev->kobj);
++
++    return 0;
++}
++
++static int bao_ipcshmem_release_fops(struct inode *inode, struct file *filp)
++{
++    struct bao_ipcshmem *bao_ipcshmem = container_of(inode->i_cdev,
++                                             struct bao_ipcshmem, cdev);
++    filp->private_data = NULL;
++
++    kobject_put(&bao_ipcshmem->dev->kobj);
++
++    return 0;
++}
++
++static struct file_operations bao_ipcshmem_fops = {
++    .owner = THIS_MODULE,
++    .read = bao_ipcshmem_read_fops,
++    .write = bao_ipcshmem_write_fops,
++    .mmap = bao_ipcshmem_mmap_fops,
++    .open = bao_ipcshmem_open_fops,
++    .release = bao_ipcshmem_release_fops
++};
++
++int bao_ipcshmem_register(struct platform_device *pdev)
++{
++    int ret = 0;
++    struct device *dev = &(pdev->dev);
++    struct device_node *np = dev->of_node;
++    struct module *owner = THIS_MODULE;
++    struct resource *r;
++    dev_t devt;
++	resource_size_t shmem_size;
++    u32 write_offset, read_offset, write_size, read_size;
++    bool rd_in_range, wr_in_range, disjoint;
++    void* shmem_base_addr = NULL;
++    int id = -1;
++    struct bao_ipcshmem *bao;
++
++    r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if(r == NULL)
++		return -EINVAL;
++    of_property_read_u32_index(np, "read-channel", 0, &read_offset);
++    of_property_read_u32_index(np, "read-channel", 1, &read_size);
++    of_property_read_u32_index(np, "write-channel", 0, &write_offset);
++    of_property_read_u32_index(np, "write-channel", 1, &write_size);
++
++    rd_in_range = (r->start + read_offset + read_size) < r->end;
++    wr_in_range =  (r->start + write_offset + write_size) < r->end;
++    disjoint = ((read_offset + read_size) <= write_offset) ||
++        ((write_offset + write_size) <= read_offset);
++
++    if(!rd_in_range || !wr_in_range || !disjoint) {
++        dev_err(&pdev->dev,"invalid channel layout\n");
++        dev_err(&pdev->dev,"rd_in_range = %d, wr_in_range = %d, disjoint = %d\n",
++            rd_in_range, wr_in_range, disjoint);
++        return -EINVAL;
++    }
++
++    shmem_size = r->end - r->start + 1;
++	shmem_base_addr = memremap(r->start, shmem_size, MEMREMAP_WB);
++	if(shmem_base_addr == NULL)
++		return -ENOMEM;
++
++    of_property_read_u32(np, "id", &id);
++    if (id >= MAX_DEVICES) {
++        dev_err(&pdev->dev,"invalid id %d\n", id);
++        ret = -EINVAL;
++        goto err_unmap;
++    }
++
++    bao = devm_kzalloc(&pdev->dev, sizeof(struct bao_ipcshmem), GFP_KERNEL);
++    if(bao == NULL) {
++        ret = -ENOMEM;
++        goto err_unmap;
++    }
++    snprintf(bao->label, NAME_LEN, "%s%d", DEV_NAME, id);
++    bao->id = id;
++    bao->read_size = read_size;
++    bao->write_size = write_size;
++    bao->read_base = shmem_base_addr + read_offset;
++    bao->write_base = shmem_base_addr + write_offset;
++    bao->physical_base = (void *)r->start;
++    bao->shmem_size = shmem_size;
++
++    cdev_init(&bao->cdev, &bao_ipcshmem_fops);
++    bao->cdev.owner = owner;
++
++    devt = MKDEV(MAJOR(bao_ipcshmem_devt), id);
++    ret = cdev_add(&bao->cdev, devt, 1);
++    if (ret) {
++        goto err_unmap;
++    }
++
++    bao->dev = device_create(cl, &pdev->dev, devt, bao, bao->label);
++    if (IS_ERR(bao->dev)) {
++        ret = PTR_ERR(bao->dev);
++        goto err_cdev;
++    }
++    dev_set_drvdata(bao->dev, bao);
++
++    return 0;
++
++err_cdev:
++    cdev_del(&bao->cdev);
++err_unmap:
++    memunmap(shmem_base_addr);
++
++    dev_err(&pdev->dev,"failed initialization\n");
++    return ret;
++}
++
++static int bao_ipcshmem_unregister(struct platform_device *pdev)
++{
++    /* TODO */
++    return 0;
++}
++
++static const struct of_device_id of_bao_ipcshmem_match[] = {
++    {
++        .compatible = "bao,ipcshmem",
++    },
++    {/* sentinel */}};
++MODULE_DEVICE_TABLE(of, of_bao_ipcshmem_match);
++
++static struct platform_driver bao_ipcshmem_driver = {
++    .probe = bao_ipcshmem_register,
++    .remove = bao_ipcshmem_unregister,
++    .driver = {
++        .name = DEV_NAME,
++        .of_match_table = of_bao_ipcshmem_match,
++    },
++};
++
++static int __init bao_ipcshmem_init(void)
++{
++    int ret;
++
++    if ((cl = class_create(DEV_NAME)) == NULL) {
++        ret = -1;
++        pr_err("unable to class_create " DEV_NAME " device\n");
++        return ret;
++    }
++
++    ret = alloc_chrdev_region(&bao_ipcshmem_devt, 0, MAX_DEVICES, DEV_NAME);
++    if (ret < 0) {
++        pr_err("unable to alloc_chrdev_region " DEV_NAME " device\n");
++        return ret;
++    }
++
++    return platform_driver_register(&bao_ipcshmem_driver);
++}
++
++static void __exit bao_ipcshmem_exit(void)
++{
++    platform_driver_unregister(&bao_ipcshmem_driver);
++    unregister_chrdev(bao_ipcshmem_devt, DEV_NAME);
++    class_destroy(cl);
++}
++
++module_init(bao_ipcshmem_init);
++module_exit(bao_ipcshmem_exit);
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("David Cerdeira");
++MODULE_AUTHOR("José Martins");
++MODULE_DESCRIPTION("bao ipc through shared-memory sample driver");
+\ No newline at end of file
+diff --git a/drivers/virt/Kconfig b/drivers/virt/Kconfig
+index f79ab13a5..df8af05ea 100644
+--- a/drivers/virt/Kconfig
++++ b/drivers/virt/Kconfig
+@@ -54,4 +54,5 @@ source "drivers/virt/coco/sev-guest/Kconfig"
+ 
+ source "drivers/virt/coco/tdx-guest/Kconfig"
+ 
++source "drivers/virt/bao/Kconfig"
+ endif
+diff --git a/drivers/virt/Makefile b/drivers/virt/Makefile
+index e9aa6fc96..74abecf75 100644
+--- a/drivers/virt/Makefile
++++ b/drivers/virt/Makefile
+@@ -12,3 +12,4 @@ obj-$(CONFIG_ACRN_HSM)		+= acrn/
+ obj-$(CONFIG_EFI_SECRET)	+= coco/efi_secret/
+ obj-$(CONFIG_SEV_GUEST)		+= coco/sev-guest/
+ obj-$(CONFIG_INTEL_TDX_GUEST)	+= coco/tdx-guest/
++obj-$(CONFIG_BAO_VIRTIO)	+= bao/
+\ No newline at end of file
+diff --git a/drivers/virt/bao/Kconfig b/drivers/virt/bao/Kconfig
+new file mode 100644
+index 000000000..2488bbb0d
+--- /dev/null
++++ b/drivers/virt/bao/Kconfig
+@@ -0,0 +1,24 @@
++# SPDX-License-Identifier: GPL-2.0
++config BAO_VIRTIO
++	tristate "Bao Hypervisor Module for VirtIO"
++	help
++	  The Bao Hypervisor Module for VirtIO represents a kernel 
++	  module that interfaces with userspace applications via ioctls, 
++	  establishing communication with the Bao Hypervisor through 
++	  hypercalls. Operating exclusively within the VirtIO backend 
++	  VM(s), it's responsible to manage and dispatch the I/O requests 
++	  between the VirtIO backend applications and the Bao Hypervisor.
++
++	  To compile as a module, choose M, the module will be called
++	  bao. If unsure, say N.
++
++config BAO_VIRTIO_INTERRUPT_MODE
++	bool "Bao Hypervisor I/O Request System configured by Interrupts"
++	default y
++	depends on BAO_VIRTIO 
++	help
++	  Say Y here to enable the I/O Request System Interrupt Mode.
++
++	  If you say N, the I/O Request System will manage VirtIO requests 
++	  on a periodic form (10ms), resulting in a potential degradation of 
++	  performance.
+\ No newline at end of file
+diff --git a/drivers/virt/bao/Makefile b/drivers/virt/bao/Makefile
+new file mode 100644
+index 000000000..9b23b0a69
+--- /dev/null
++++ b/drivers/virt/bao/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0
++obj-$(CONFIG_BAO_VIRTIO) := bao.o
++bao-y := ioctls.o ioeventfd.o dispatcher_io.o irqfd.o dm.o intc.o
+\ No newline at end of file
+diff --git a/drivers/virt/bao/bao_drv.h b/drivers/virt/bao/bao_drv.h
+new file mode 100644
+index 000000000..81a1e24ca
+--- /dev/null
++++ b/drivers/virt/bao/bao_drv.h
+@@ -0,0 +1,312 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Provides some definitions for the Bao Hypervisor Modules
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef __BAO_HSM_DRV_H
++#define __BAO_HSM_DRV_H
++
++#include <linux/bao.h>
++#include <linux/types.h>
++#include <linux/spinlock.h>
++#include <linux/wait.h>
++#include <linux/mutex.h>
++#include <linux/fs.h>
++#include <linux/file.h>
++
++#define BAO_IOEVENTFD_FLAG_DATAMATCH (1 << 1)
++#define BAO_IOEVENTFD_FLAG_DEASSIGN (1 << 2)
++#define BAO_IRQFD_FLAG_DEASSIGN 1U
++
++#define BAO_IO_CLIENT_DESTROYING 0U
++
++#define BAO_VIRTIO_DM_FLAG_DESTROYING 0U
++#define BAO_VIRTIO_DM_FLAG_CLEARING_IOREQ 1U
++
++#define BAO_INVALID_DM_ID (0xffffU)
++
++/** 
++ * Contains the specific parameters of a Bao VirtIO request
++ * @list: List node for this request
++ * @virtio_request: The VirtIO request
++*/
++struct bao_io_request {
++	struct list_head list;
++	struct bao_virtio_request virtio_request;
++};
++
++struct bao_virtio_dm;
++struct bao_io_client;
++
++typedef int (*io_handler_t)(struct bao_io_client *client,
++			    struct bao_io_request *req);
++
++/**
++ * Structure of I/O client.
++ * @name: Client name
++ * @dm:	The DM that the client belongs to
++ * @list: List node for this bao_io_client
++ * @is_default:	If this client is the default one (0 means the client is a userpace client, 1 means the client is a kernel client)
++ * @flags: Flags (BAO_IO_CLIENT_*)
++ * @range_list:	I/O ranges
++ * @range_lock:	Lock to protect range_list
++ * @io_req_map:	The pending I/O requests bitmap
++ * @handler: I/O requests handler of this client
++ * @thread:	The thread which executes the handler
++ * @wq:	The wait queue for the handler thread parking
++ * @priv: Data for the thread
++ */
++struct bao_io_client {
++	char name[BAO_NAME_MAX_LEN];
++	struct bao_virtio_dm *dm;
++	struct list_head list;
++	bool is_default;
++	unsigned long flags;
++	struct list_head range_list;
++	rwlock_t range_lock;
++	DECLARE_BITMAP(io_req_map, BAO_IO_REQUEST_MAX);
++	io_handler_t handler;
++	struct task_struct *thread;
++	wait_queue_head_t wq;
++	void *priv;
++};
++
++/**
++ * Properties of a Bao VirtIO DM
++ * @list: Entry within global list of all VirtIO VMs
++ * @id: DM ID (Used to handle the VirtIO ID, responsible to connect each frontend driver to the backend device)
++ * @flags: Flags (BAO_VIRTIO_DM_*)
++ * @virtio_requests: Array of all VirtIO requests that are free to process
++ * @virtio_requests_lock: Lock to protect virtio_requests list
++ * @ioeventfds: List to link all bao_ioeventfd
++ * @ioeventfds_lock: Lock to protect ioeventfds list
++ * @ioeventfd_client: I/O client for ioeventfds of the DM
++ * @irqfds: List to link all bao_irqfd
++ * @irqfds_lock: Lock to protect irqfds list
++ * @irqfd_wq: Workqueue for irqfd async shutdown
++ * @io_clients_lock:	Lock to protect io_clients and default_client
++ * @io_clients:	The I/O request clients list of this DM
++ * @default_client:	The default I/O request client
++ */
++struct bao_virtio_dm {
++	struct list_head list;
++	__u32 id;
++	unsigned long flags;
++	struct list_head virtio_requests;
++	struct mutex virtio_requests_lock;
++	struct list_head ioeventfds;
++	struct mutex ioeventfds_lock;
++	struct bao_io_client *ioeventfd_client;
++	struct list_head irqfds;
++	struct mutex irqfds_lock;
++	struct workqueue_struct *irqfd_wq;
++	spinlock_t io_clients_lock;
++	struct list_head io_clients;
++	struct bao_io_client *default_client;
++};
++
++/**
++ * Structure of I/O request range
++ * @list: List node for this range
++ * @start: The start address of the range
++ * @end: The end address of the range
++ * 
++ */
++struct bao_io_range {
++	struct list_head list;
++	u64 start;
++	u64 end;
++};
++
++extern struct list_head bao_dm_list;
++extern rwlock_t bao_dm_list_lock;
++
++long bao_dm_ioctl(struct file *filp, unsigned int cmd,
++		  unsigned long ioctl_param);
++
++/************************************************************************************************************/
++/*                             Device Model (DM) VirtIO Backend API                                         */
++/************************************************************************************************************/
++
++/**
++ * Create the Bao VirtIO DM
++ * @id: The ID of the DM
++ * @return dm file descriptor on success, <0 on error
++ */
++int bao_dm_create(unsigned int id);
++
++/**
++ * Destroy the Bao VirtIO DM
++ * @id: The ID of the DM
++ */
++int bao_dm_destroy(unsigned int id);
++
++/************************************************************************************************************/
++/*                                         Dispatcher I/O API                                               */
++/************************************************************************************************************/
++
++/**
++ * Initialize the dispatcher I/O
++ * @dm: The dm to be initialized on the dispatcher I/O
++ */
++int bao_dispatcher_io_init(struct bao_virtio_dm *dm);
++
++/**
++ * Destroy the dispatcher I/O
++ * @dm: The dm to be destroyed on the dispatcher I/O
++ */
++void bao_dispatcher_io_destroy(struct bao_virtio_dm *dm);
++
++/**
++ * Create an I/O client
++ * @dm:	The DM that this client belongs to
++ * @handler: The I/O client handler for the I/O requests
++ * @data: Private data for the handler
++ * @is_default:	If it is the default client
++ * @name: The name of dispatcher I/O client
++ */
++struct bao_io_client *
++bao_dispatcher_io_client_create(struct bao_virtio_dm *dm, io_handler_t handler,
++				void *data, bool is_default, const char *name);
++
++/**
++ * Destroy an I/O client
++ * @client: The dispatcher I/O client to be destroyed 
++ */
++void bao_dispatcher_io_client_destroy(struct bao_io_client *client);
++
++/**
++ * Attach and wait for an I/O client
++ * @client: The I/O client to be waited
++ */
++int bao_dispatcher_io_client_wait(struct bao_io_client *client);
++
++/**
++ * Request an I/O operation from a userspace client
++ * @client: The I/O client
++ * @req: The virtio request to be requested
++ */
++int bao_dispatcher_io_request(struct bao_io_client *client,
++			      struct bao_virtio_request *req);
++
++/**
++ * Notify the dm that an I/O request is completed
++ * @dm: The dm that the I/O request belongs to
++ * @req: The request to be completed
++ */
++int bao_dispatcher_io_request_complete(struct bao_virtio_dm *dm,
++				       struct bao_virtio_request *req);
++
++/**
++ * Add an I/O range monitored by a dispatcher I/O client
++ * @client: The I/O client to be added
++ * @type: The type of the range
++ * @start: The start address of the range
++ * @end: The end address of the range
++ */
++int bao_dispatcher_io_range_add(struct bao_io_client *client, u64 start,
++				u64 end);
++
++/**
++ * Delete an I/O range monitored by an dispatcher I/O client
++ * @client: The dispatcher I/O client to be deleted
++ * @type: The type of the range
++ * @start: The start address of the range
++ * @end: The end address of the range
++ */
++void bao_dispatcher_io_range_del(struct bao_io_client *client, u64 start,
++				 u64 end);
++
++/**
++ * Setup the Dispatcher I/O
++ */
++int bao_dispatcher_io_setup(void);
++
++/**
++ * Remove the Dispatcher I/O
++ * @return void
++ */
++void bao_dispatcher_io_remove(void);
++
++/************************************************************************************************************/
++/*                                           ioeventfd API                                                  */
++/************************************************************************************************************/
++
++/**
++ * Initialize the ioeventfd
++ * @dm: The dm that the ioeventfd belongs to
++ */
++int bao_ioeventfd_init(struct bao_virtio_dm *dm);
++
++/**
++ * Destroy the ioeventfd
++ * @dm: The dm that the ioeventfd belongs to
++ */
++void bao_ioeventfd_destroy(struct bao_virtio_dm *dm);
++
++/**
++ * Configure the ioeventfd
++ * @dm: The dm that the ioeventfd belongs to
++ * @config: The ioeventfd configuration
++ */
++int bao_ioeventfd_config(struct bao_virtio_dm *dm,
++			 struct bao_ioeventfd *config);
++
++/************************************************************************************************************/
++/*                                             irqfd API                                                    */
++/************************************************************************************************************/
++
++/**
++ * Initialize the irqfd
++ * @dm: The dm that the irqfd belongs to
++ */
++int bao_irqfd_init(struct bao_virtio_dm *dm);
++
++/**
++ * Destroy the irqfd
++ * @dm: The dm that the irqfd belongs to
++ */
++void bao_irqfd_destroy(struct bao_virtio_dm *dm);
++
++/**
++ * Configure the irqfd
++ * @dm: The dm that the irqfd belongs to
++ * @config: The irqfd configuration
++ */
++int bao_irqfd_config(struct bao_virtio_dm *dm, struct bao_irqfd *config);
++
++/************************************************************************************************************/
++/*                                    VirtIO Interrupt Controller API                                       */
++/************************************************************************************************************/
++
++/**
++ * Setup the interrupt controller handler
++ * @handler: The interrupt handler
++ */
++void bao_intc_setup_handler(void (*handler)(void));
++
++/**
++ * Remove the interrupt controller handler
++ */
++void bao_intc_remove_handler(void);
++
++/************************************************************************************************************/
++/*                                               Other                                                      */
++/************************************************************************************************************/
++
++/**
++ * Notify the VirtIO Guest directly without the need of an Irqfd signal
++ * @note: This function is only used when using the QEMU VirtIO Backends. 
++ * However, future Bao QEMU's VirtIO patches may implement the call notification 
++ * system thorugh irqfd signals, instead of direcly notifying the Guest
++ * through the BAO_IOCTL_IO_NOTIFY_GUEST ioctl.
++ * @dm: The dm that manages the VirtIO backend
++ */
++int bao_notify_guest(struct bao_virtio_dm *dm);
++
++#endif
+\ No newline at end of file
+diff --git a/drivers/virt/bao/dispatcher_io.c b/drivers/virt/bao/dispatcher_io.c
+new file mode 100644
+index 000000000..2895586fc
+--- /dev/null
++++ b/drivers/virt/bao/dispatcher_io.c
+@@ -0,0 +1,768 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Hypervisor Dispatcher I/O
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/kthread.h>
++#include <linux/mm.h>
++#include <linux/slab.h>
++#include <linux/eventfd.h>
++#include <linux/workqueue.h>
++#include <linux/delay.h>
++#include <linux/interrupt.h>
++
++#include <linux/bao.h>
++#include "bao_drv.h"
++#include "hypercall.h"
++
++#ifndef CONFIG_BAO_VIRTIO_INTERRUPT_MODE
++#include <time.h>
++#define INTERVAL_NS 10000000
++static timer_t timerid;
++#endif
++
++/**
++ * Responsible for dispatching I/O requests for all VirtIO DMs
++ * This function is called by the workqueue
++ * @work: The work struct
++ */
++static void dispatcher_io(struct work_struct *work);
++// Workqueue for the I/O requests
++static struct workqueue_struct *bao_dispatcher_io_wq;
++// Associates the workqueue with the function dispatcher_io
++static DECLARE_WORK(dispatcher_io_work, dispatcher_io);
++
++/**
++ * Backup the I/O requests from the Bao Hypervisor
++ * @dm: The DM that the I/O request belongs to
++ * @note: When a new DM is created, to ensure that the I/O requests are not lost,
++ * the I/O requests are backed up (e.g. when the Dispatcher I/O is driven by Interrupts, 
++ * if the Frontend VM starts first than the Backend VM the interrupt signal will be lost)
++ */
++static void dispatcher_io_backup(struct bao_virtio_dm *dm);
++
++/**
++ * Pause the I/O requests dispatching 
++ */
++static void dispatcher_io_pause(void);
++
++/**
++ * Resume the I/O requests dispatching 
++ */
++static void dispatcher_io_resume(void);
++
++/**
++ * Check if there are pending requests
++ * @client: The I/O client
++ * @return: bool
++*/
++static inline bool has_pending_requests(struct bao_io_client *client)
++{
++	return !bitmap_empty(client->io_req_map, BAO_IO_REQUEST_MAX);
++}
++
++/**
++ * Check if the I/O request client is being destroyed
++ * @client: The I/O client
++ * @return: bool
++*/
++static inline bool is_destroying(struct bao_io_client *client)
++{
++	return test_bit(BAO_IO_CLIENT_DESTROYING, &client->flags);
++}
++
++/**
++ * Find the first available bit in the client io_req_map
++ * @client: The I/O client
++ * @return: int (the first available bit) or -EBUSY (if there is no available bit)
++*/
++static int next_availabe_bit(struct bao_io_client *client)
++{
++	int i = -EBUSY;
++
++	for (i = 0; i < BAO_IO_REQUEST_MAX; i++) {
++		if (!test_bit(i, client->io_req_map)) {
++			break;
++		}
++	}
++	return i;
++}
++
++void bao_dispatcher_io_client_destroy(struct bao_io_client *client)
++{
++	struct bao_io_client *range, *next;
++	struct bao_virtio_dm *dm = client->dm;
++
++	// pause the I/O requests dispatcher
++	dispatcher_io_pause();
++
++	// set the destroying flag
++	set_bit(BAO_IO_CLIENT_DESTROYING, &client->flags);
++
++	// stop the client
++	if (client->is_default)
++		wake_up_interruptible(&client->wq);
++	else
++		kthread_stop(client->thread);
++
++	// remove the client
++	spin_lock_bh(&dm->io_clients_lock);
++	if (client->is_default)
++		dm->default_client = NULL;
++	else
++		list_del(&client->list);
++	spin_unlock_bh(&dm->io_clients_lock);
++
++	// remove the ranges
++	write_lock_bh(&client->range_lock);
++	list_for_each_entry_safe(range, next, &client->range_list, list) {
++		list_del(&range->list);
++		kfree(range);
++	}
++	write_unlock_bh(&client->range_lock);
++	kfree(client);
++
++	// resume the I/O requests dispatcher
++	dispatcher_io_resume();
++}
++
++void bao_dispatcher_io_destroy(struct bao_virtio_dm *dm)
++{
++	struct bao_io_client *client, *next;
++
++	// destroy all the I/O clients
++	list_for_each_entry_safe(client, next, &dm->io_clients, list) {
++		bao_dispatcher_io_client_destroy(client);
++	}
++	// destroy the default client
++	if (dm->default_client) {
++		bao_dispatcher_io_client_destroy(dm->default_client);
++	}
++}
++
++int bao_dispatcher_io_client_wait(struct bao_io_client *client)
++{
++	if (client->is_default) {
++		/*
++		 * In the default client, a user space thread waits on the
++		 * waitqueue. The is_destroying() check is used to notify user
++		 * space the client is going to be destroyed.
++		 */
++		wait_event_interruptible(client->wq,
++					 has_pending_requests(client) ||
++						 is_destroying(client));
++		if (is_destroying(client))
++			return -ENODEV;
++	} else {
++		/*
++		 * In the non-default client,a kernel space thread waits on the
++		 * waitqueue. The kthread_should_stop() check is used to notify 
++		 * the handler thread the handler is going to be destroyed.
++		 */
++		wait_event_interruptible(client->wq,
++					 has_pending_requests(client) ||
++						 kthread_should_stop());
++	}
++
++	return 0;
++}
++
++/**
++ * Add the I/O request to the list
++ * @client: The DM that the I/O request belongs to
++ * @req: The I/O request to be added
++ */
++static void bao_io_push_request(struct bao_virtio_dm *dm,
++				struct bao_io_request *req)
++{
++	// add the request to the end of the requests list
++	mutex_lock(&dm->virtio_requests_lock);
++	list_add_tail(&req->list, &dm->virtio_requests);
++	mutex_unlock(&dm->virtio_requests_lock);
++}
++
++/**
++ * Return the first free I/O request from the list
++ * @client: The client that the I/O request belongs to
++ * @ret: The I/O request to be returned
++ */
++static int bao_io_pop_request(struct bao_io_client *client,
++			      struct bao_io_request *ret)
++{
++	struct bao_io_request *req;
++	int ret_val = -EFAULT;
++
++	// lock the mutex
++	mutex_lock(&client->dm->virtio_requests_lock);
++
++	// pop the first request from the list
++	req = list_first_entry_or_null(&client->dm->virtio_requests,
++				       struct bao_io_request, list);
++
++	// check if there are requests pending to be processed
++	if (req == NULL) {
++		ret_val = -EFAULT;
++		goto err_unlock;
++	}
++
++	// Copy the request to the return value
++	*ret = *req;
++
++	// delete the request from the list
++	list_del(&req->list);
++
++	// free the request
++	kfree(req);
++
++	// unlock the mutex
++	mutex_unlock(&client->dm->virtio_requests_lock);
++	ret_val = 0;
++
++	return ret_val;
++
++err_unlock:
++	// clear the flag to avoid entering in a loop
++	clear_bit(find_first_bit(client->io_req_map, BAO_IO_REQUEST_MAX),
++		  client->io_req_map);
++	// unlock the mutex
++	mutex_unlock(&client->dm->virtio_requests_lock);
++	return ret_val;
++}
++
++/**
++ * Complete the I/O request
++ * @client: The I/O client that the I/O request belongs to
++ * @req: The I/O request to be completed
++ */
++static int bao_dispatcher_io_complete_request(struct bao_io_client *client,
++					      struct bao_io_request *req)
++{
++	struct bao_virtio_request ret;
++
++	// clear the bit corresponding to the request in the client io_req_map
++	clear_bit(find_first_bit(client->io_req_map, BAO_IO_REQUEST_MAX),
++		  client->io_req_map);
++
++	// notify the Hypervisor that the request was completed
++	ret = bao_hypercall_virtio(
++		req->virtio_request.virtio_id, req->virtio_request.reg_off,
++		req->virtio_request.addr, req->virtio_request.op,
++		req->virtio_request.value, req->virtio_request.cpu_id,
++		req->virtio_request.vcpu_id);
++
++	return 0;
++}
++
++/**
++ * Execution entity thread of a kernel I/O client.
++ * @data: The I/O client
++ */
++static int io_client_kernel_thread(void *data)
++{
++	struct bao_io_client *client = data;
++	struct bao_io_request *req = kzalloc(sizeof(*req), GFP_KERNEL);
++	int ret = -EINVAL;
++
++	while (!kthread_should_stop()) {
++		bao_dispatcher_io_client_wait(client);
++		while (has_pending_requests(client)) {
++			// get the first kernel handled I/O request
++			if (bao_io_pop_request(client, req)) {
++				kfree(req);
++				return -EFAULT;
++			}
++			// call the handler callback of the I/O client
++			// (e.g bao_ioeventfd_handler() for an ioeventfd client)
++			ret = client->handler(client, req);
++			if (ret < 0) {
++				break;
++			}
++			// complete the request
++			else {
++				bao_dispatcher_io_complete_request(client, req);
++			}
++		}
++	}
++
++	kfree(req);
++	return 0;
++}
++
++struct bao_io_client *
++bao_dispatcher_io_client_create(struct bao_virtio_dm *dm, io_handler_t handler,
++				void *data, bool is_default, const char *name)
++{
++	struct bao_io_client *client;
++	int next_avail_bit = -EBUSY;
++
++	// if the client is implemenmted in the kernel, it must have a kernel handler (e.g ioeventfd)
++	if (!handler && !is_default) {
++		return NULL;
++	}
++
++	// allocate the client
++	client = kzalloc(sizeof(*client), GFP_KERNEL);
++	if (!client)
++		return NULL;
++
++	// initialize the client
++	client->handler = handler;
++	client->dm = dm;
++	client->priv = data;
++	client->is_default = is_default;
++
++	if (name)
++		strncpy(client->name, name, sizeof(client->name) - 1);
++
++	rwlock_init(&client->range_lock);
++	INIT_LIST_HEAD(&client->range_list);
++	init_waitqueue_head(&client->wq);
++
++	// if the client is implemented in the kernel, create the handler thread
++	if (client->handler) {
++		client->thread = kthread_run(io_client_kernel_thread, client,
++					     "DM%u-%s-client", client->dm->id,
++					     client->name);
++		if (IS_ERR(client->thread)) {
++			kfree(client);
++			return NULL;
++		}
++	}
++
++	// add the client
++	spin_lock_bh(&dm->io_clients_lock);
++	if (is_default)
++		dm->default_client = client;
++	else
++		list_add(&client->list, &dm->io_clients);
++
++	// if the client is the default client, backup the I/O requests (if any)
++	if (is_default)
++		dispatcher_io_backup(dm);
++
++	// check if the default client have pending requests
++	mutex_lock(&dm->virtio_requests_lock);
++	if (!list_empty(&dm->virtio_requests) && is_default) {
++		next_avail_bit = next_availabe_bit(client);
++		if (next_avail_bit != -EBUSY) {
++			// set the next available bit in the client io_req_map
++			set_bit(next_avail_bit, client->io_req_map);
++
++			// wake up the handler thread
++			wake_up_interruptible(&client->wq);
++		} else {
++			goto err_unlock;
++		}
++	}
++	mutex_unlock(&dm->virtio_requests_lock);
++	spin_unlock_bh(&dm->io_clients_lock);
++
++	return client;
++
++err_unlock:
++	mutex_unlock(&dm->virtio_requests_lock);
++	spin_unlock_bh(&dm->io_clients_lock);
++	return NULL;
++}
++
++int bao_dispatcher_io_request(struct bao_io_client *client,
++			      struct bao_virtio_request *ret)
++{
++	struct bao_io_request *req = kzalloc(sizeof(*req), GFP_KERNEL);
++	int ret_val = -EINVAL;
++
++	// check if the default client exists
++	if (!client) {
++		return -EEXIST;
++	}
++
++	// get the first free I/O request
++	ret_val = bao_io_pop_request(client, req);
++
++	// if there are no requests pending to be processed return -EEXIST
++	if (ret_val) {
++		return -EEXIST;
++	}
++
++	// copy the request to the return value
++	*ret = req->virtio_request;
++
++	// free the request
++	kfree(req);
++
++	return ret_val;
++}
++
++int bao_dispatcher_io_request_complete(struct bao_virtio_dm *dm,
++				       struct bao_virtio_request *req)
++{
++	int ret = -EINVAL;
++	struct bao_io_request *io_req = kzalloc(sizeof(*io_req), GFP_KERNEL);
++
++	// if the default client exists
++	if (dm->default_client) {
++		// update the request
++		io_req->virtio_request = *req;
++		// complete the request
++		spin_lock_bh(&dm->io_clients_lock);
++		ret = bao_dispatcher_io_complete_request(dm->default_client,
++							 io_req);
++		spin_unlock_bh(&dm->io_clients_lock);
++	}
++
++	// free the request
++	kfree(io_req);
++
++	return ret;
++}
++
++int bao_dispatcher_io_range_add(struct bao_io_client *client, u64 start,
++				u64 end)
++{
++	struct bao_io_range *range;
++
++	// check if the range is valid
++	if (end < start) {
++		return -EINVAL;
++	}
++
++	// allocate the range
++	range = kzalloc(sizeof(*range), GFP_KERNEL);
++	if (!range)
++		return -ENOMEM;
++
++	// initialize the range
++	range->start = start;
++	range->end = end;
++
++	// add the range
++	write_lock_bh(&client->range_lock);
++	list_add(&range->list, &client->range_list);
++	write_unlock_bh(&client->range_lock);
++
++	return 0;
++}
++
++void bao_dispatcher_io_range_del(struct bao_io_client *client, u64 start,
++				 u64 end)
++{
++	struct bao_io_range *range;
++
++	// delete the range from the list
++	write_lock_bh(&client->range_lock);
++	list_for_each_entry(range, &client->range_list, list) {
++		if (start == range->start && end == range->end) {
++			list_del(&range->list);
++			kfree(range);
++			break;
++		}
++	}
++	write_unlock_bh(&client->range_lock);
++}
++
++/** 
++ * Check if the I/O request is in the range
++ * @range: The I/O request range
++ * @req: The I/O request
++ * @return bool
++*/
++static bool in_range(struct bao_io_range *range, struct bao_io_request *req)
++{
++	bool ret = false;
++
++	// check if the I/O request is in the range
++	if (req->virtio_request.addr >= range->start &&
++	    (req->virtio_request.addr + req->virtio_request.access_width - 1) <=
++		    range->end)
++		ret = true;
++
++	return ret;
++}
++
++/**
++ * Find the I/O request client that the I/O request belongs to 
++ * @dm: The DM that the I/O request belongs to
++ * @req: The I/O request
++ * @return struct bao_io_client* (either the kernel or the default client)
++ */
++static struct bao_io_client *find_io_client(struct bao_virtio_dm *dm,
++					    struct bao_io_request *req)
++{
++	struct bao_io_client *client, *found = NULL;
++	struct bao_io_range *range;
++
++	lockdep_assert_held(&dm->io_clients_lock);
++
++	// for all the I/O clients
++	list_for_each_entry(client, &dm->io_clients, list) {
++		read_lock_bh(&client->range_lock);
++		// for all the ranges
++		list_for_each_entry(range, &client->range_list, list) {
++			// check if the I/O request is in the range of a given client
++			if (in_range(range, req)) {
++				found = client;
++				break;
++			}
++		}
++		read_unlock_bh(&client->range_lock);
++		if (found)
++			break;
++	}
++
++	// if the I/O request is not in the range of any client, return the default client
++	// otherwise, return the client that the I/O request belongs to
++	return found ? found : dm->default_client;
++}
++
++/**
++ * Acquires the I/O requests from the Bao Hypervisor 
++ * @dm: The DM that the I/O request belongs to 
++ */
++static int dispatch_io(struct bao_virtio_dm *dm)
++{
++	struct bao_io_client *client;
++	struct bao_io_request *req;
++	struct bao_virtio_request ret;
++	int next_avail_bit = -EBUSY;
++	int rc = 0;
++
++	// allocate the request
++	req = kzalloc(sizeof(*req), GFP_KERNEL);
++
++	// update the request
++	// the virtio_id is the id (since the bao_virtio_dm is an abstraction of a DM to handle I/O requests - VirtIO Backend DM)
++	req->virtio_request.virtio_id = dm->id;
++	// clear the reg_off and addr fields
++	req->virtio_request.reg_off = 0;
++	req->virtio_request.addr = 0;
++	// BAO_IO_ASK will extract the I/O request from Bao Hypervisor
++	req->virtio_request.op = BAO_IO_ASK;
++	// clear the other fields
++	req->virtio_request.value = 0;
++	req->virtio_request.cpu_id = 0;
++	req->virtio_request.vcpu_id = 0;
++
++	// perform a Hypercall to get the I/O request from the Bao Hypervisor
++	ret = bao_hypercall_virtio(
++		req->virtio_request.virtio_id, req->virtio_request.reg_off,
++		req->virtio_request.addr, req->virtio_request.op,
++		req->virtio_request.value, req->virtio_request.cpu_id,
++		req->virtio_request.vcpu_id);
++
++	if (ret.ret != 0) {
++		rc = -EFAULT;
++		goto err_unlock_1;
++	}
++
++	// update the virtio request
++	req->virtio_request = ret;
++
++	// find the I/O client that the I/O request belongs to
++	spin_lock_bh(&dm->io_clients_lock);
++	client = find_io_client(dm, req);
++	if (!client) {
++		rc = -EINVAL;
++		goto err_unlock_2;
++	}
++
++	// find next available bit in the client io_req_map
++	mutex_lock(&dm->virtio_requests_lock);
++	next_avail_bit = next_availabe_bit(client);
++	if (next_avail_bit == -EBUSY) {
++		rc = -EBUSY;
++		goto err_unlock_3;
++	}
++	mutex_unlock(&dm->virtio_requests_lock);
++
++	// set the next available bit in the client io_req_map
++	set_bit(next_avail_bit, client->io_req_map);
++
++	// add the request to the end of the virtio_request list
++	bao_io_push_request(dm, req);
++
++	// wake up the handler thread
++	wake_up_interruptible(&client->wq);
++	spin_unlock_bh(&dm->io_clients_lock);
++
++	return 0;
++
++err_unlock_3:
++	mutex_unlock(&dm->virtio_requests_lock);
++
++err_unlock_2:
++	spin_unlock_bh(&dm->io_clients_lock);
++
++err_unlock_1:
++	kfree(req);
++	return rc;
++}
++
++static void dispatcher_io(struct work_struct *work)
++{
++	struct bao_virtio_dm *dm;
++	// for each DM, dispatch the I/O requests
++	read_lock(&bao_dm_list_lock);
++	list_for_each_entry(dm, &bao_dm_list, list) {
++		dispatch_io(dm);
++	}
++	read_unlock(&bao_dm_list_lock);
++}
++
++/**
++ * Interrupt Controller handler for the I/O requests
++ * @note: This function is called by the interrupt controller
++ * when an interrupt is triggered (when a new I/O request is available)
++ */
++static void dispatcher_io_intc_handler(void)
++{
++	// add the work to the workqueue
++	queue_work(bao_dispatcher_io_wq, &dispatcher_io_work);
++}
++
++static void dispatcher_io_pause(void)
++{
++#ifdef CONFIG_BAO_VIRTIO_INTERRUPT_MODE
++	// remove the interrupt handler
++	bao_intc_remove_handler();
++#endif
++	// drain the workqueue (wait for all the work to finish)
++	drain_workqueue(bao_dispatcher_io_wq);
++}
++
++static void dispatcher_io_resume(void)
++{
++#ifdef CONFIG_BAO_VIRTIO_INTERRUPT_MODE
++	// setup the interrupt handler
++	bao_intc_setup_handler(dispatcher_io_intc_handler);
++#endif
++	// add the work to the workqueue
++	queue_work(bao_dispatcher_io_wq, &dispatcher_io_work);
++}
++
++/**
++ * Responsible for dispatching I/O requests for all VirtIO DMs with the pooling mode
++ */
++#ifndef CONFIG_BAO_VIRTIO_INTERRUPT_MODE
++int dispatcher_io_pooling_handler(void *data)
++{
++	// resume the I/O requests dispatcher
++	dispatcher_io_resume();
++}
++#endif
++
++static void dispatcher_io_backup(struct bao_virtio_dm *dm)
++{
++	struct bao_virtio_request ret;
++
++	// allocate the request
++	struct bao_io_request *req;
++	req = kzalloc(sizeof(*req), GFP_KERNEL);
++
++	// update the request
++	// the virtio_id is the id (since the bao_virtio_dm is an abstraction of a DM to handle I/O requests - VirtIO Backend DM)
++	req->virtio_request.virtio_id = dm->id;
++	// clear the reg_off and addr fields
++	req->virtio_request.reg_off = 0;
++	req->virtio_request.addr = 0;
++	// BAO_IO_ASK will peak the most priority request from Bao
++	req->virtio_request.op = BAO_IO_ASK;
++	// clear the value
++	req->virtio_request.value = 0;
++	req->virtio_request.cpu_id = 0;
++	req->virtio_request.vcpu_id = 0;
++
++	// perform a Hypercall to get the I/O request from the Bao Hypervisor
++	ret = bao_hypercall_virtio(
++		req->virtio_request.virtio_id, req->virtio_request.reg_off,
++		req->virtio_request.addr, req->virtio_request.op,
++		req->virtio_request.value, req->virtio_request.cpu_id,
++		req->virtio_request.vcpu_id);
++
++	// verify if there are requests pending to be processed
++	if (ret.ret != 0) {
++		kfree(req);
++		return;
++	}
++
++	// update the virtio request
++	req->virtio_request = ret;
++
++	// add the request to the end of the virtio request avail list
++	bao_io_push_request(dm, req);
++}
++
++int bao_dispatcher_io_init(struct bao_virtio_dm *dm)
++{
++	// Do nothing.
++	return 0;
++}
++
++int bao_dispatcher_io_setup(void)
++{
++	// Create the workqueue
++	bao_dispatcher_io_wq = alloc_workqueue("bao_dispatcher_io_wq",
++					       WQ_HIGHPRI | WQ_MEM_RECLAIM, 1);
++	if (!bao_dispatcher_io_wq) {
++		return -ENOMEM;
++	}
++
++#ifdef CONFIG_BAO_VIRTIO_INTERRUPT_MODE
++	// setup the interrupt handler
++	bao_intc_setup_handler(dispatcher_io_intc_handler);
++#else
++	struct sigevent sev;
++
++	// Create timer
++	sev.sigev_notify = SIGEV_THREAD; // Notify via thread
++	sev.sigev_notify_function =
++		dispatcher_io_pooling_handler; // Callback function
++	sev.sigev_value.sival_ptr = &timerid; // Pass timer ID to callback
++
++	if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1) {
++		perror("bao dispatcher I/O pooling mode: timer_create");
++		return -1;
++	}
++
++	// Configure timer
++	struct itimerspec its;
++	its.it_value.tv_sec = 0; // Initial expiration time (seconds)
++	its.it_value.tv_nsec =
++		INTERVAL_NS; // Initial expiration time (nanoseconds)
++	its.it_interval.tv_sec = 0; // Interval for periodic timer (seconds)
++	its.it_interval.tv_nsec =
++		INTERVAL_NS; // Interval for periodic timer (nanoseconds)
++
++	// Start timer
++	if (timer_settime(timerid, 0, &its, NULL) == -1) {
++		perror("bao dispatcher I/O pooling mode: timer_settime");
++		return -1;
++	}
++#endif
++
++	return 0;
++}
++
++void bao_dispatcher_io_remove(void)
++{
++	// if the workqueue exists
++	if (bao_dispatcher_io_wq) {
++		// pause the I/O requests dispatcher
++		dispatcher_io_pause();
++		// destroy the workqueue
++		destroy_workqueue(bao_dispatcher_io_wq);
++#ifdef CONFIG_BAO_VIRTIO_INTERRUPT_MODE
++		// remove the interrupt handler
++		bao_intc_remove_handler();
++#else
++		// stop the pooling timer
++		timer_delete(timerid);
++#endif
++	}
++}
+\ No newline at end of file
+diff --git a/drivers/virt/bao/dm.c b/drivers/virt/bao/dm.c
+new file mode 100644
+index 000000000..0085be66e
+--- /dev/null
++++ b/drivers/virt/bao/dm.c
+@@ -0,0 +1,227 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Hypervisor Backend Device Model (DM) for VirtIO
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ * 
++ * Bao Hypervisor VirtIO Backend DM management
++ *
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#include "bao_drv.h"
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/mm.h>
++#include <linux/slab.h>
++#include <linux/device.h>
++#include <linux/anon_inodes.h>
++#include <linux/miscdevice.h>
++#include "hypercall.h"
++
++/* List of all VirtIO Backend DMs */
++LIST_HEAD(bao_dm_list);
++
++/*
++ * bao_dm_list is read in a worker thread which dispatch I/O requests and
++ * is wrote in DM creation ioctl. This rwlock mechanism is used to protect it.
++ */
++DEFINE_RWLOCK(bao_dm_list_lock);
++
++static int bao_dm_open(struct inode *inode, struct file *filp)
++{
++	return 0;
++}
++
++static int bao_dm_release(struct inode *inode, struct file *filp)
++{
++	struct bao_virtio_dm *dm = filp->private_data;
++	kfree(dm);
++	return 0;
++}
++
++static const struct vm_operations_struct bao_mmap_vm_mem_ops = {
++#ifdef CONFIG_HAVE_IOREMAP_PROT
++	.access = generic_access_phys
++#endif
++};
++
++/**
++ * ioctl handler for DM mmap
++ * @filp: The file pointer of the DM
++ * @vma: Contains the information about the virtual address range that is used to access
++ * 
++ * @note:
++ * The device driver only has to build suitable page tables for the address range and, 
++ * if necessary, replace vma->vm_ops with a new set of operations.
++ */
++static int bao_dm_mmap(struct file *filp, struct vm_area_struct *vma)
++{
++	/*
++	* There are two ways of building the page tables: 
++	* 1) Doing it all at once with a function called 'remap_pfn_range'
++	* 2) Doing it a page at a time via the 'nopage' DMA method.
++	* For this driver, we will use the first method.
++	*/
++
++	// calculate the size
++	size_t size = vma->vm_end - vma->vm_start;
++
++	// calculate the offset
++	phys_addr_t offset = (phys_addr_t)vma->vm_pgoff << PAGE_SHIFT;
++
++	// verify if the vma exists
++	if (!vma) {
++		return -EINVAL;
++	}
++
++	// verify if the offset is valid
++	if (offset >> PAGE_SHIFT != vma->vm_pgoff) {
++		return -EINVAL;
++	}
++
++	// update the vma operations
++	vma->vm_ops = &bao_mmap_vm_mem_ops;
++
++	// remap-pfn-range will mark the range DM_IO
++	if (remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff, size,
++			    vma->vm_page_prot)) {
++		return -EAGAIN;
++	}
++
++	return 0;
++}
++
++static struct file_operations bao_dm_fops = {
++	.owner = THIS_MODULE,
++	.open = bao_dm_open,
++	.release = bao_dm_release,
++	.unlocked_ioctl = bao_dm_ioctl,
++	.llseek = noop_llseek,
++	.mmap = bao_dm_mmap,
++};
++
++int bao_dm_create(unsigned int id)
++{
++	int rc = 0;
++	struct file *file;
++	struct bao_virtio_dm *dm;
++	char name[BAO_NAME_MAX_LEN];
++
++	// verify if already exists a DM with the same ID
++	write_lock_bh(&bao_dm_list_lock);
++	list_for_each_entry(dm, &bao_dm_list, list) {
++		if (dm->id == id) {
++			write_unlock_bh(&bao_dm_list_lock);
++			return -EEXIST;
++		}
++	}
++	write_unlock_bh(&bao_dm_list_lock);
++
++	// allocate memory for the DM
++	dm = kzalloc(sizeof(struct bao_virtio_dm), GFP_KERNEL);
++	if (!dm) {
++		pr_err("%s: kzalloc failed\n", __FUNCTION__);
++		return -ENOMEM;
++	}
++
++	// initialize the DM structure
++	INIT_LIST_HEAD(&dm->virtio_requests);
++	mutex_init(&dm->virtio_requests_lock);
++	INIT_LIST_HEAD(&dm->io_clients);
++	spin_lock_init(&dm->io_clients_lock);
++
++	// set the DM ID (or the VirtIO ID)
++	dm->id = id;
++
++	// create a new file descriptor for the DM
++	rc = get_unused_fd_flags(O_CLOEXEC);
++	if (rc < 0) {
++		pr_err("%s: get_unused_fd_flags failed\n", __FUNCTION__);
++		goto err_unlock;
++	}
++
++	// create a new file for each DM
++	snprintf(name, sizeof(name), "bao-dm-%d", id);
++	file = anon_inode_getfile(name, &bao_dm_fops, dm, O_RDWR);
++	if (IS_ERR(file)) {
++		pr_err("%s: anon_inode_getfile failed\n", __FUNCTION__);
++		put_unused_fd(rc);
++		goto err_unlock;
++	}
++
++	// initialize the I/O request client
++	bao_dispatcher_io_init(dm);
++
++	// add the DM to the list
++	write_lock_bh(&bao_dm_list_lock);
++	list_add(&dm->list, &bao_dm_list);
++	write_unlock_bh(&bao_dm_list_lock);
++
++	// initialize the ioeventfd and irqfd
++	bao_ioeventfd_init(dm);
++	bao_irqfd_init(dm);
++
++	// expose the file descriptor to userspace
++	fd_install(rc, file);
++
++	return rc;
++
++err_unlock:
++	kfree(dm);
++	return rc;
++}
++
++int bao_dm_destroy(unsigned int id)
++{
++	struct bao_virtio_dm *dm;
++
++	// find the DM in the list
++	write_lock_bh(&bao_dm_list_lock);
++	list_for_each_entry(dm, &bao_dm_list, list) {
++		if (dm->id == id)
++			break;
++	}
++	write_unlock_bh(&bao_dm_list_lock);
++
++	// mark as destroying
++	set_bit(BAO_VIRTIO_DM_FLAG_DESTROYING, &dm->flags);
++
++	// remove the DM from the list
++	write_lock_bh(&bao_dm_list_lock);
++	list_del_init(&dm->list);
++	write_unlock_bh(&bao_dm_list_lock);
++
++	// destroy the ioeventfd
++	bao_ioeventfd_destroy(dm);
++
++	// destroy the irqfd
++	bao_irqfd_destroy(dm);
++
++	// destroy the I/O request client
++	bao_dispatcher_io_destroy(dm);
++
++	// mark the id as invalid
++	dm->id = BAO_INVALID_DM_ID;
++
++	// clear the destroying flag
++	clear_bit(BAO_VIRTIO_DM_FLAG_DESTROYING, &dm->flags);
++
++	// free the DM
++	kfree(dm);
++
++	return 0;
++}
++
++int bao_notify_guest(struct bao_virtio_dm *dm)
++{
++	struct bao_virtio_request ret;
++
++	// notify the Guest (Used Buffer Notification or Change Configuration Notification)
++	ret = bao_hypercall_virtio(dm->id, 0, 0, BAO_IO_NOTIFY, 0, 0, 0);
++	if (ret.ret != 0) {
++		return -EFAULT;
++	}
++	return 0;
++}
+\ No newline at end of file
+diff --git a/drivers/virt/bao/hypercall.h b/drivers/virt/bao/hypercall.h
+new file mode 100644
+index 000000000..020383ae1
+--- /dev/null
++++ b/drivers/virt/bao/hypercall.h
+@@ -0,0 +1,40 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Hypercall API for Bao Hypervisor
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef __BAO_HYPERCALL_H
++#define __BAO_HYPERCALL_H
++
++#include <asm/bao.h>
++#include <linux/bao.h>
++
++/* VirtIO Hypercall ID */
++#define VIRTIO_HC_ID 0x2
++
++/**
++ * bao_hypercall_virtio() - Performs a VirtIO Hypercall
++ * @virtio_id:	VirtIO ID (used to connect each frontend driver to the backend device)
++ * @reg_off:	Gives the offset of the MMIO Register that was accessed
++ * @addr:	Address of the I/O range
++ * @op:		Write, Read, Ask or Notify operation
++ * @value:	Value to write or read
++ * @cpu_id:	Frontend CPU ID of the I/O request
++ * @vcpu_id:	Frontend vCPU ID of the I/O request
++ *
++ * Returns: The VirtIO request structure
++ */
++static inline struct bao_virtio_request
++bao_hypercall_virtio(u64 virtio_id, u64 reg_off, u64 addr, u64 op, u64 value,
++		     u64 cpu_id, u64 vcpu_id)
++{
++	return asm_bao_virtio_hypercall(VIRTIO_HC_ID, virtio_id, reg_off, addr, op,
++				 value, cpu_id, vcpu_id);
++}
++
++#endif /* __BAO_HYPERCALL_H */
+\ No newline at end of file
+diff --git a/drivers/virt/bao/intc.c b/drivers/virt/bao/intc.c
+new file mode 100644
+index 000000000..6a19ff910
+--- /dev/null
++++ b/drivers/virt/bao/intc.c
+@@ -0,0 +1,110 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Hypervisor Interrupt Controller (INTC) for VirtIO
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/interrupt.h>
++#include <linux/of_irq.h>
++
++// interrupt number
++static int irq_number;
++
++// handler for the interrupt
++static void (*bao_intc_handler)(void);
++
++/**
++ * bao_interrupt_handler - Interrupt handler
++ * @irq: Interrupt number
++ * @dev_id: Device ID
++ */
++static irqreturn_t bao_interrupt_handler(int irq, void *dev_id)
++{
++	// if the handler is set, call it
++	if (bao_intc_handler)
++		bao_intc_handler();
++
++	return IRQ_HANDLED;
++}
++
++void bao_intc_setup_handler(void (*handler)(void))
++{
++	bao_intc_handler = handler;
++}
++
++void bao_intc_remove_handler(void)
++{
++	bao_intc_handler = NULL;
++}
++
++/**
++ * bao_virtio_intc_probe - Probe the interrupt handler
++ * @pdev: Platform device pointer
++ */
++static int bao_virtio_intc_probe(struct platform_device *pdev)
++{
++	int ret;
++
++	// get the interrupt number from the device tree
++	// TODO: If necessary, we can extend this to support multiple interrupts
++	// (ideally, one per VirtIO device). This scenario should be worthy
++	// when multiple VirtIO backends are attached to the same Backend VM.
++	ret = platform_get_irq(pdev, 0);
++
++	if (ret < 0) {
++		dev_err(&pdev->dev, "Failed to read interrupt numbers\n");
++		return ret;
++	}
++
++	// save the interrupt number
++	irq_number = ret;
++
++	// request the interrupt to the kernel and register the handler
++	ret = request_irq(irq_number, bao_interrupt_handler, IRQF_SHARED,
++			  "bao-virtio-intc", pdev);
++	if (ret) {
++		dev_err(&pdev->dev, "Failed to request IRQ %d\n", irq_number);
++		return ret;
++	}
++
++	return 0;
++}
++
++/**
++ * bao_virtio_intc_remove - Remove the interrupt handler
++ * @pdev: Platform device pointer
++ */
++static int bao_virtio_intc_remove(struct platform_device *pdev)
++{
++	free_irq(irq_number, pdev);
++	return 0;
++}
++
++static const struct of_device_id bao_virtio_intc_dt_ids[] = {
++	{ .compatible = "bao,virtio-intc" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, bao_virtio_intc_dt_ids);
++
++static struct platform_driver bao_virtio_intc_driver = {
++    .probe = bao_virtio_intc_probe,
++    .remove = bao_virtio_intc_remove,
++    .driver = {
++        .name = "bao-virtio-intc",
++        .of_match_table = of_match_ptr(bao_virtio_intc_dt_ids),
++        .owner = THIS_MODULE,
++    },
++};
++
++module_platform_driver(bao_virtio_intc_driver);
++
++MODULE_AUTHOR("João Peixoto <joaopeixotooficial@gmail.com>");
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Bao Hypervisor Interrupt Controller (INTC) for VirtIO");
+\ No newline at end of file
+diff --git a/drivers/virt/bao/ioctls.c b/drivers/virt/bao/ioctls.c
+new file mode 100644
+index 000000000..26f5f9402
+--- /dev/null
++++ b/drivers/virt/bao/ioctls.c
+@@ -0,0 +1,238 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Hypervisor IOCTLs Handler for VirtIO
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/device.h>
++#include <linux/file.h>
++#include <linux/cpu.h>
++#include <linux/mm.h>
++#include <linux/miscdevice.h>
++#include <linux/anon_inodes.h>
++
++#include <linux/bao.h>
++#include "bao_drv.h"
++#include "hypercall.h"
++
++/**
++ * DM ioctls handler
++ * @filp: The file pointer of the DM
++ * @cmd: The ioctl command
++ * @ioctl_param: The ioctl parameter
++ */
++long bao_dm_ioctl(struct file *filp, unsigned int cmd,
++		  unsigned long ioctl_param)
++{
++	struct bao_virtio_request *req;
++	int rc = -EINVAL;
++	struct bao_virtio_dm *dm = filp->private_data;
++
++	switch (cmd) {
++	case BAO_IOCTL_IO_CREATE_CLIENT:
++		if (dm->default_client) {
++			pr_err("%s: default client already exists\n",
++			       __FUNCTION__);
++			return -EEXIST;
++		}
++		if (!bao_dispatcher_io_client_create(dm, NULL, NULL, true,
++						     "user")) {
++			pr_err("%s: bao_dispatcher_io_client_create failed\n",
++			       __FUNCTION__);
++			return -EINVAL;
++		}
++		rc = 0;
++		break;
++	case BAO_IOCTL_IO_DESTROY_CLIENT:
++		if (!dm->default_client) {
++			pr_err("%s: default client does not exist\n",
++			       __FUNCTION__);
++			return -EINVAL;
++		}
++		bao_dispatcher_io_client_destroy(dm->default_client);
++		rc = 0;
++		break;
++	case BAO_IOCTL_IO_ATTACH_CLIENT:
++		if (!dm->default_client) {
++			pr_err("%s: default client does not exist\n",
++			       __FUNCTION__);
++			return -EINVAL;
++		}
++		rc = bao_dispatcher_io_client_wait(dm->default_client);
++		break;
++	case BAO_IOCTL_IO_REQUEST:
++		req = memdup_user((void __user *)ioctl_param,
++				  sizeof(struct bao_virtio_request));
++		if (IS_ERR(req)) {
++			pr_err("%s: memdup_user failed\n", __FUNCTION__);
++			return PTR_ERR(req);
++		}
++		rc = bao_dispatcher_io_request(dm->default_client, req);
++		if (copy_to_user((void __user *)ioctl_param, req,
++				 sizeof(struct bao_virtio_request))) {
++			pr_err("%s: copy_to_user failed\n", __FUNCTION__);
++			return -EFAULT;
++		}
++		kfree(req);
++		break;
++	case BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED:
++		req = memdup_user((void __user *)ioctl_param,
++				  sizeof(struct bao_virtio_request));
++		if (IS_ERR(req)) {
++			pr_err("%s: memdup_user failed\n", __FUNCTION__);
++			return PTR_ERR(req);
++		}
++		rc = bao_dispatcher_io_request_complete(dm, req);
++		break;
++	case BAO_IOCTL_IO_NOTIFY_GUEST:
++		if (!dm->default_client) {
++			pr_err("%s: default client does not exist\n",
++			       __FUNCTION__);
++			return -EINVAL;
++		}
++		rc = bao_notify_guest(dm);
++		break;
++	case BAO_IOCTL_IOEVENTFD:
++		struct bao_ioeventfd ioeventfd;
++		if (copy_from_user(&ioeventfd, (void __user *)ioctl_param,
++				   sizeof(struct bao_ioeventfd))) {
++			pr_err("%s: copy_from_user failed\n", __FUNCTION__);
++			return -EFAULT;
++		}
++		rc = bao_ioeventfd_config(dm, &ioeventfd);
++		break;
++	case BAO_IOCTL_IRQFD:
++		struct bao_irqfd irqfd;
++		if (copy_from_user(&irqfd, (void __user *)ioctl_param,
++				   sizeof(struct bao_irqfd))) {
++			pr_err("%s: copy_from_user failed\n", __FUNCTION__);
++			return -EFAULT;
++		}
++		rc = bao_irqfd_config(dm, &irqfd);
++		break;
++	default:
++		pr_err("%s: unknown ioctl cmd [%d]\n", __FUNCTION__, cmd);
++		rc = -ENOTTY;
++		break;
++	}
++	return rc;
++}
++
++/**
++ * DM ioctls open handler
++ * @inode: The inode of the DM
++ * @filp: The file pointer of the DM
++ */
++static int bao_dev_open(struct inode *inode, struct file *filp)
++{
++	return 0;
++}
++
++/**
++ * DM ioctls release handler
++ * @inode: The inode of the DM
++ * @filp: The file pointer of the DM
++ */
++static int bao_dev_release(struct inode *inode, struct file *filp)
++{
++	return 0;
++}
++
++/**
++ * Device ioctl handler
++ * @filp: The file pointer
++ * @cmd: The ioctl command
++ * @ioctl_param: The ioctl parameter
++ */
++static long bao_dev_ioctl(struct file *filp, unsigned int cmd,
++			  unsigned long ioctl_param)
++{
++	int rc = -EINVAL;
++	unsigned int id;
++
++	switch (cmd) {
++	case BAO_IOCTL_DM_VIRTIO_BACKEND_CREATE:
++		if (copy_from_user(&id, (void __user *)ioctl_param,
++				   sizeof(unsigned int))) {
++			pr_err("%s: copy_from_user failed\n", __FUNCTION__);
++			return -EFAULT;
++		}
++		rc = bao_dm_create(id);
++		break;
++	case BAO_IOCTL_DM_VIRTIO_BACKEND_DESTROY:
++		if (copy_from_user(&id, (void __user *)ioctl_param,
++				   sizeof(unsigned int))) {
++			pr_err("%s: copy_from_user failed\n", __FUNCTION__);
++			return -EFAULT;
++		}
++		rc = bao_dm_destroy(id);
++		break;
++	default:
++		pr_err("%s: unknown ioctl cmd [%d]\n", __FUNCTION__, cmd);
++		return -ENOTTY;
++	}
++	return rc;
++}
++
++static const struct attribute_group *bao_attr_groups[] = { NULL };
++
++static const struct file_operations bao_fops = {
++	.owner = THIS_MODULE,
++	.open = bao_dev_open,
++	.release = bao_dev_release,
++	.unlocked_ioctl = bao_dev_ioctl,
++};
++
++struct miscdevice bao_dev = {
++	.minor = MISC_DYNAMIC_MINOR,
++	.name = "bao",
++	.fops = &bao_fops,
++	.groups = bao_attr_groups,
++};
++
++/**
++ * Device driver initialization
++ */
++static int __init bao_init(void)
++{
++	int ret;
++
++	// register the misc device
++	ret = misc_register(&bao_dev);
++	if (ret) {
++		pr_err("Create misc dev failed!\n");
++		return ret;
++	}
++
++	// initialize the Dispatcher I/O subsystem
++	ret = bao_dispatcher_io_setup();
++	if (ret) {
++		pr_err("Setup dispatcher I/O failed!\n");
++		misc_deregister(&bao_dev);
++		return ret;
++	}
++
++	return 0;
++}
++
++/**
++ * Device driver exit
++ */
++static void __exit bao_exit(void)
++{
++	bao_dispatcher_io_remove();
++	misc_deregister(&bao_dev);
++}
++module_init(bao_init);
++module_exit(bao_exit);
++
++MODULE_AUTHOR("João Peixoto <joaopeixotooficial@gmail.com>");
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Bao Hypervisor Dispatcher I/O");
+diff --git a/drivers/virt/bao/ioeventfd.c b/drivers/virt/bao/ioeventfd.c
+new file mode 100644
+index 000000000..c75e460fb
+--- /dev/null
++++ b/drivers/virt/bao/ioeventfd.c
+@@ -0,0 +1,316 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Hypervisor Ioeventfd's Management
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#include "bao_drv.h"
++#include <linux/eventfd.h>
++
++/**
++ * Properties of a ioeventfd
++ * @list: List node of the ioeventfd
++ * @eventfd: Eventfd of the ioeventfd
++ * @addr: Address of I/O range
++ * @data: Data for matching
++ * @length:	Length of I/O range
++ * @wildcard: Data matching or not
++ */
++struct ioeventfd {
++	struct list_head list;
++	struct eventfd_ctx *eventfd;
++	u64 addr;
++	u64 data;
++	int length;
++	bool wildcard;
++};
++
++/**
++ * Shutdown the ioeventfd
++ * @dm:	The DM to shutdown the ioeventfd
++ * @p: The ioeventfd to shutdown
++ */
++static void bao_ioeventfd_shutdown(struct bao_virtio_dm *dm,
++				   struct ioeventfd *p)
++{
++	lockdep_assert_held(&dm->ioeventfds_lock);
++
++	// unregister the ioeventfd
++	eventfd_ctx_put(p->eventfd);
++	// remove the ioeventfd from the list
++	list_del(&p->list);
++	// free the ioeventfd
++	kfree(p);
++}
++
++/**
++ * Check if the configuration of ioeventfd is valid 
++ * @config: The configuration of ioeventfd
++ * @return: bool
++ */
++static bool bao_ioeventfd_config_valid(struct bao_ioeventfd *config)
++{
++	// check if the configuration is valid
++	if (!config)
++		return false;
++
++	// check for overflow
++	if (config->addr + config->len < config->addr)
++		return false;
++
++	// vhost supports 1, 2, 4 and 8 bytes access
++	if (!(config->len == 1 || config->len == 2 || config->len == 4 ||
++	      config->len == 8))
++		return false;
++
++	return true;
++}
++
++/**
++ * Check if the ioeventfd is conflict with other  ioeventfds
++ * @dm: The DM to check
++ * @ioeventfd: The ioeventfd to check
++ * @return: bool
++ */
++static bool bao_ioeventfd_is_conflict(struct bao_virtio_dm *dm,
++				      struct ioeventfd *ioeventfd)
++{
++	struct ioeventfd *p;
++
++	lockdep_assert_held(&dm->ioeventfds_lock);
++
++	// either one is wildcard, the data matching will be skipped
++	list_for_each_entry(p, &dm->ioeventfds, list)
++		if (p->eventfd == ioeventfd->eventfd &&
++		    p->addr == ioeventfd->addr &&
++		    (p->wildcard || ioeventfd->wildcard ||
++		     p->data == ioeventfd->data))
++			return true;
++
++	return false;
++}
++
++/**
++ * Return the matched ioeventfd
++ * @dm: The DM to check
++ * @addr: The address of I/O request
++ * @data: The data of I/O request
++ * @len: The length of I/O request
++ * @return: The matched ioeventfd or NULL
++ */
++static struct ioeventfd *bao_ioeventfd_match(struct bao_virtio_dm *dm, u64 addr,
++					 u64 data, int len)
++{
++	struct ioeventfd *p = NULL;
++
++	lockdep_assert_held(&dm->ioeventfds_lock);
++
++	list_for_each_entry(p, &dm->ioeventfds, list) {
++		if (p->addr == addr && p->length >= len &&
++		    (p->wildcard || p->data == data))
++			return p;
++	}
++
++	return NULL;
++}
++
++/**
++ * Assign an eventfd to a DM and create a ioeventfd associated with the
++ * eventfd. The properties of the ioeventfd are built from a &struct
++ * bao_ioeventfd.
++ * @dm:	The DM to assign the eventfd to
++ * @config:	The configuration of the eventfd
++ */
++static int bao_ioeventfd_assign(struct bao_virtio_dm *dm,
++				struct bao_ioeventfd *config)
++{
++	struct eventfd_ctx *eventfd;
++	struct ioeventfd *new;
++	int rc = 0;
++
++	// check if the configuration is valid
++	if (!bao_ioeventfd_config_valid(config)) {
++		return -EINVAL;
++	}
++
++	// get the eventfd from the file descriptor
++	eventfd = eventfd_ctx_fdget(config->fd);
++	if (IS_ERR(eventfd))
++		return PTR_ERR(eventfd);
++
++	// allocate a new  ioeventfd
++	new = kzalloc(sizeof(*new), GFP_KERNEL);
++	if (!new) {
++		rc = -ENOMEM;
++		goto err;
++	}
++
++	// initialize the  ioeventfd
++	INIT_LIST_HEAD(&new->list);
++	new->addr = config->addr;
++	new->length = config->len;
++	new->eventfd = eventfd;
++
++	/*
++	 * BAO_IOEVENTFD_FLAG_DATAMATCH flag is set in virtio 1.0 support, the
++	 * writing of notification register of each virtqueue may trigger the
++	 * notification. There is no data matching requirement.
++	 */
++	if (config->flags & BAO_IOEVENTFD_FLAG_DATAMATCH)
++		new->data = config->data;
++	else
++		new->wildcard = true;
++
++	mutex_lock(&dm->ioeventfds_lock);
++
++	// check if the  ioeventfd is conflict with other  ioeventfds
++	if (bao_ioeventfd_is_conflict(dm, new)) {
++		rc = -EEXIST;
++		goto err_unlock;
++	}
++
++	// register the I/O range into dispatcher I/O client
++	rc = bao_dispatcher_io_range_add(dm->ioeventfd_client, new->addr,
++					 new->addr + new->length - 1);
++	if (rc < 0)
++		goto err_unlock;
++
++	// add the  ioeventfd to the list
++	list_add_tail(&new->list, &dm->ioeventfds);
++	mutex_unlock(&dm->ioeventfds_lock);
++
++	return rc;
++
++err_unlock:
++	mutex_unlock(&dm->ioeventfds_lock);
++	kfree(new);
++err:
++	eventfd_ctx_put(eventfd);
++	return rc;
++}
++
++/**
++ * Deassign an eventfd from a DM and destroy the ioeventfd associated with
++ * the eventfd.
++ * @dm:	The DM to deassign the eventfd from
++ * @config:	The configuration of the eventfd
++ */
++static int bao_ioeventfd_deassign(struct bao_virtio_dm *dm,
++				  struct bao_ioeventfd *config)
++{
++	struct ioeventfd *p;
++	struct eventfd_ctx *eventfd;
++
++	// get the eventfd from the file descriptor
++	eventfd = eventfd_ctx_fdget(config->fd);
++	if (IS_ERR(eventfd))
++		return PTR_ERR(eventfd);
++
++	mutex_lock(&dm->ioeventfds_lock);
++	list_for_each_entry(p, &dm->ioeventfds, list) {
++		if (p->eventfd != eventfd)
++			continue;
++		// delete the I/O range from dispatcher I/O client
++		bao_dispatcher_io_range_del(dm->ioeventfd_client, p->addr,
++					    p->addr + p->length - 1);
++		// shutdown the ioeventfd
++		bao_ioeventfd_shutdown(dm, p);
++		break;
++	}
++	mutex_unlock(&dm->ioeventfds_lock);
++
++	// unregister the eventfd
++	eventfd_ctx_put(eventfd);
++	return 0;
++}
++
++/**
++ * Handle the I/O requests of the  ioeventfd
++ * This function is called by the I/O client kernel thread (ioreq_task)
++ * @client: The dispatcher I/O client to handle the I/O requests
++ * @req: The I/O request to be handled
++ */
++static int bao_ioeventfd_handler(struct bao_io_client *client,
++				 struct bao_io_request *req)
++{
++	struct ioeventfd *p;
++
++	/*
++	* I/O requests are dispatched by range check only, so a
++	* bao_io_client need process both READ and WRITE accesses
++	* of same range. READ accesses are safe to be ignored here
++	* because virtio MMIO drivers only write into the notify 
++	* register (QueueNotify field) for notification.
++	* In fact, the read request won't exist since 
++	* the QueueNotify field is WRITE ONLY from the driver
++	* and read only from the device.
++	*/
++	if (req->virtio_request.op == BAO_IO_READ) {
++		req->virtio_request.value = 0;
++		return 0;
++	}
++
++	mutex_lock(&client->dm->ioeventfds_lock);
++
++	// find the matched ioeventfd
++	p = bao_ioeventfd_match(client->dm, req->virtio_request.addr,
++			    req->virtio_request.value,
++			    req->virtio_request.access_width);
++	// if matched, signal the eventfd
++	if (p)
++		eventfd_signal(p->eventfd, 1);
++	mutex_unlock(&client->dm->ioeventfds_lock);
++
++	return 0;
++}
++
++int bao_ioeventfd_config(struct bao_virtio_dm *dm, struct bao_ioeventfd *config)
++{
++	// check if the DM and configuration are valid
++	if (WARN_ON(!dm || !config))
++		return -EINVAL;
++
++	// deassign the eventfd from the DM
++	if (config->flags & BAO_IOEVENTFD_FLAG_DEASSIGN)
++		bao_ioeventfd_deassign(dm, config);
++
++	// assign the eventfd to the DM
++	return bao_ioeventfd_assign(dm, config);
++}
++
++int bao_ioeventfd_init(struct bao_virtio_dm *dm)
++{
++	char name[BAO_NAME_MAX_LEN];
++
++	mutex_init(&dm->ioeventfds_lock);
++	INIT_LIST_HEAD(&dm->ioeventfds);
++
++	// create a new name for the ioeventfd client based on type and DM ID
++	snprintf(name, sizeof(name), "bao-ioeventfd-%u", dm->id);
++
++	// create a new dispatcher I/O client
++	dm->ioeventfd_client = bao_dispatcher_io_client_create(
++		dm, bao_ioeventfd_handler, NULL, false, name);
++	if (!dm->ioeventfd_client) {
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++void bao_ioeventfd_destroy(struct bao_virtio_dm *dm)
++{
++	struct ioeventfd *p, *next;
++
++	// destroy the dispatcher I/O client
++	bao_dispatcher_io_client_destroy(dm->ioeventfd_client);
++	mutex_lock(&dm->ioeventfds_lock);
++	// shutdown all the ioeventfds
++	list_for_each_entry_safe(p, next, &dm->ioeventfds, list)
++		bao_ioeventfd_shutdown(dm, p);
++	mutex_unlock(&dm->ioeventfds_lock);
++}
+\ No newline at end of file
+diff --git a/drivers/virt/bao/irqfd.c b/drivers/virt/bao/irqfd.c
+new file mode 100644
+index 000000000..23061bc26
+--- /dev/null
++++ b/drivers/virt/bao/irqfd.c
+@@ -0,0 +1,298 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Hypervisor Irqfd's Management
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#include <linux/eventfd.h>
++#include <linux/file.h>
++#include <linux/poll.h>
++#include <linux/slab.h>
++#include "hypercall.h"
++
++#include "bao_drv.h"
++
++/**
++ * struct irqfd - Properties of irqfd
++ * @dm:	Associated DM pointer
++ * @wait: Entry of wait-queue
++ * @shutdown: Async shutdown work
++ * @eventfd: Associated eventfd
++ * @list: Entry within &bao_virtio_dm.irqfds of irqfds of a DM
++ * @pt:	Structure for select/poll on the associated eventfd
++ */
++struct irqfd {
++	struct bao_virtio_dm *dm;
++	wait_queue_entry_t wait;
++	struct work_struct shutdown;
++	struct eventfd_ctx *eventfd;
++	struct list_head list;
++	poll_table pt;
++};
++
++/**
++ * Shutdown a irqfd
++ * @irqfd: The irqfd to shutdown
++ */
++static void bao_irqfd_shutdown(struct irqfd *irqfd)
++{
++	u64 cnt;
++	lockdep_assert_held(&irqfd->dm->irqfds_lock);
++
++	// delete the irqfd from the list of irqfds
++	list_del_init(&irqfd->list);
++
++	// remove the irqfd from the wait queue
++	eventfd_ctx_remove_wait_queue(irqfd->eventfd, &irqfd->wait, &cnt);
++
++	// release the eventfd
++	eventfd_ctx_put(irqfd->eventfd);
++
++	// free the irqfd
++	kfree(irqfd);
++}
++
++/**
++ * Inject a virtual interrupt to the guest DM
++ * @irqfd: The irqfd to inject
++ */
++static int bao_irqfd_inject(struct irqfd *irqfd)
++{
++	struct bao_virtio_request ret;
++	struct bao_virtio_dm *dm = irqfd->dm;
++
++	// notify the Hypervisor about the event
++	ret = bao_hypercall_virtio(dm->id, 0, 0, BAO_IO_NOTIFY, 0, 0, 0);
++
++	if (ret.ret != 0) {
++		return -EFAULT;
++	}
++	return 0;
++}
++
++/**
++ * Custom wake-up handling to be notified whenever underlying eventfd is signaled.
++ * @wait: Entry of wait-queue
++ * @mode: ...
++ * @sync: ...
++ * @key: Poll bits
++ * @return int 
++ */
++static int bao_irqfd_wakeup(wait_queue_entry_t *wait, unsigned int mode,
++			    int sync, void *key)
++{
++	unsigned long poll_bits = (unsigned long)key;
++	struct irqfd *irqfd;
++	struct bao_virtio_dm *dm;
++
++	// get the irqfd from the wait queue
++	irqfd = container_of(wait, struct irqfd, wait);
++
++	// get the DM from the irqfd
++	dm = irqfd->dm;
++
++	// check if the event is signaled
++	if (poll_bits & POLLIN)
++		// an event has been signaled, inject a irqfd
++		bao_irqfd_inject(irqfd);
++
++	if (poll_bits & POLLHUP)
++		// do shutdown work in thread to hold wqh->lock
++		queue_work(dm->irqfd_wq, &irqfd->shutdown);
++
++	return 0;
++}
++
++/**
++ * Custom poll function to be notified whenever underlying eventfd is signaled.
++ * @file: The file to poll
++ * @wqh: The wait queue head
++ * @pt: The poll table
++ */
++static void bao_irqfd_poll_func(struct file *file, wait_queue_head_t *wqh,
++				poll_table *pt)
++{
++	struct irqfd *irqfd;
++
++	// get the irqfd from the file
++	irqfd = container_of(pt, struct irqfd, pt);
++	// add the irqfd to the wait queue
++	add_wait_queue(wqh, &irqfd->wait);
++}
++
++/**
++ * Shutdown a irqfd
++ * @work: The work to shutdown the irqfd
++ */
++static void irqfd_shutdown_work(struct work_struct *work)
++{
++	struct irqfd *irqfd;
++	struct bao_virtio_dm *dm;
++
++	// get the irqfd from the work
++	irqfd = container_of(work, struct irqfd, shutdown);
++
++	// get the DM from the irqfd
++	dm = irqfd->dm;
++
++	// shutdown the irqfd
++	mutex_lock(&dm->irqfds_lock);
++	if (!list_empty(&irqfd->list))
++		bao_irqfd_shutdown(irqfd);
++	mutex_unlock(&dm->irqfds_lock);
++}
++
++/*
++ * Assign an eventfd to a DM and create a irqfd associated with the
++ * eventfd. The properties of the irqfd are built from a &struct
++ * bao_irqfd.
++ */
++static int bao_irqfd_assign(struct bao_virtio_dm *dm, struct bao_irqfd *args)
++{
++	struct eventfd_ctx *eventfd = NULL;
++	struct irqfd *irqfd, *tmp;
++	__poll_t events;
++	struct fd f;
++	int ret = 0;
++
++	// allocate a new irqfd
++	irqfd = kzalloc(sizeof(*irqfd), GFP_KERNEL);
++	if (!irqfd)
++		return -ENOMEM;
++
++	// initialize the irqfd
++	irqfd->dm = dm;
++	INIT_LIST_HEAD(&irqfd->list);
++	INIT_WORK(&irqfd->shutdown, irqfd_shutdown_work);
++
++	// get the file descriptor
++	f = fdget(args->fd);
++	if (!f.file) {
++		ret = -EBADF;
++		goto out;
++	}
++
++	// get the eventfd from the file descriptor
++	eventfd = eventfd_ctx_fileget(f.file);
++	if (IS_ERR(eventfd)) {
++		ret = PTR_ERR(eventfd);
++		goto fail;
++	}
++
++	// assign the eventfd to the irqfd
++	irqfd->eventfd = eventfd;
++
++	// install custom wake-up handling to be notified whenever underlying eventfd is signaled
++	init_waitqueue_func_entry(&irqfd->wait, bao_irqfd_wakeup);
++	init_poll_funcptr(&irqfd->pt, bao_irqfd_poll_func);
++
++	// add the irqfd to the list of irqfds of the DM
++	mutex_lock(&dm->irqfds_lock);
++	list_for_each_entry(tmp, &dm->irqfds, list) {
++		if (irqfd->eventfd != tmp->eventfd)
++			continue;
++		ret = -EBUSY;
++		mutex_unlock(&dm->irqfds_lock);
++		goto fail;
++	}
++	list_add_tail(&irqfd->list, &dm->irqfds);
++	mutex_unlock(&dm->irqfds_lock);
++
++	// check the pending event in this stage
++	events = vfs_poll(f.file, &irqfd->pt);
++
++	// inject an virtual interrupt if the event is signaled
++	if (events & EPOLLIN)
++		bao_irqfd_inject(irqfd);
++
++	fdput(f);
++	return 0;
++fail:
++	if (eventfd && !IS_ERR(eventfd))
++		eventfd_ctx_put(eventfd);
++
++	fdput(f);
++out:
++	kfree(irqfd);
++	return ret;
++}
++
++/**
++ * Deassign an eventfd from a DM and destroy the associated irqfd.
++ * @dm: The DM to deassign the eventfd
++ * @args: The &struct bao_irqfd to deassign
++ */
++static int bao_irqfd_deassign(struct bao_virtio_dm *dm, struct bao_irqfd *args)
++{
++	struct irqfd *irqfd, *tmp;
++	struct eventfd_ctx *eventfd;
++
++	// get the eventfd from the file descriptor
++	eventfd = eventfd_ctx_fdget(args->fd);
++	if (IS_ERR(eventfd))
++		return PTR_ERR(eventfd);
++
++	// find the irqfd associated with the eventfd and shutdown it
++	mutex_lock(&dm->irqfds_lock);
++	list_for_each_entry_safe(irqfd, tmp, &dm->irqfds, list) {
++		if (irqfd->eventfd == eventfd) {
++			bao_irqfd_shutdown(irqfd);
++			break;
++		}
++	}
++	mutex_unlock(&dm->irqfds_lock);
++
++	// release the eventfd
++	eventfd_ctx_put(eventfd);
++
++	return 0;
++}
++
++int bao_irqfd_config(struct bao_virtio_dm *dm, struct bao_irqfd *config)
++{
++	// check if the DM and configuration are valid
++	if (WARN_ON(!dm || !config))
++		return -EINVAL;
++
++	// deassign the eventfd
++	if (config->flags & BAO_IRQFD_FLAG_DEASSIGN)
++		return bao_irqfd_deassign(dm, config);
++
++	// assign the eventfd
++	return bao_irqfd_assign(dm, config);
++}
++
++int bao_irqfd_init(struct bao_virtio_dm *dm)
++{
++	char name[BAO_NAME_MAX_LEN];
++
++	mutex_init(&dm->irqfds_lock);
++	INIT_LIST_HEAD(&dm->irqfds);
++
++	// create a new name for the irqfd client based on type and DM ID
++	snprintf(name, sizeof(name), "bao-irqfd-%u", dm->id);
++
++	// allocate a new workqueue for the irqfd
++	dm->irqfd_wq = alloc_workqueue(name, 0, 0);
++	if (!dm->irqfd_wq)
++		return -ENOMEM;
++
++	return 0;
++}
++
++void bao_irqfd_destroy(struct bao_virtio_dm *dm)
++{
++	struct irqfd *irqfd, *next;
++
++	// destroy the workqueue
++	destroy_workqueue(dm->irqfd_wq);
++	mutex_lock(&dm->irqfds_lock);
++	// shutdown all the irqfds
++	list_for_each_entry_safe(irqfd, next, &dm->irqfds, list)
++		bao_irqfd_shutdown(irqfd);
++	mutex_unlock(&dm->irqfds_lock);
++}
+\ No newline at end of file
+diff --git a/include/uapi/linux/bao.h b/include/uapi/linux/bao.h
+new file mode 100644
+index 000000000..8141a1801
+--- /dev/null
++++ b/include/uapi/linux/bao.h
+@@ -0,0 +1,109 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++/*
++ * Userspace interface for /dev/bao - Bao Hypervisor Service Module
++ *
++ * This file can be used by applications that need to communicate with Bao
++ * via the ioctl interface.
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Authors:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef _UAPI_BAO_H
++#define _UAPI_BAO_H
++
++#include <linux/types.h>
++#include <linux/uuid.h>
++#include <linux/list.h>
++
++#define BAO_IO_WRITE 0x0
++#define BAO_IO_READ 0x1
++#define BAO_IO_ASK 0x2
++#define BAO_IO_NOTIFY 0x3
++#define BAO_DM_CREATE 0x4
++#define BAO_DM_DESTROY 0x5
++
++#define BAO_NAME_MAX_LEN 32
++#define BAO_IO_REQUEST_MAX 16
++
++/** 
++ * Contains the specific parameters of a Bao VirtIO request
++ * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
++ * @reg_off: Gives the offset of the MMIO Register that was accessed
++ * @addr: Gives the real address that was accessed
++ * @op: Write, Read, Ask or Notify operation
++ * @value: Value to write or read
++ * @access_width: Access width (VirtIO MMIO only allows 4-byte wide and alligned accesses)
++ * @cpu_id: Frontend CPU ID of the I/O request
++ * @vcpu_id: Frontend vCPU ID of the I/O request
++ * @ret: Return value
++*/
++struct bao_virtio_request {
++	__u64 virtio_id;
++	__u64 reg_off;
++	__u64 addr;
++	__u64 op;
++	__u64 value;
++	__u64 access_width;
++	__u64 cpu_id;
++	__u64 vcpu_id;
++	__u64 ret;
++};
++
++/**
++ * Contains the specific parameters of a ioeventfd request
++ * @fd:		The fd of eventfd associated with a hsm_ioeventfd
++ * @flags:	Logical-OR of BAO_IOEVENTFD_FLAG_*
++ * @addr:	The start address of IO range of ioeventfd
++ * @len:	The length of IO range of ioeventfd
++ * @reserved:	Reserved and should be 0
++ * @data:	Data for data matching
++ */
++struct bao_ioeventfd {
++	__u32 fd;
++	__u32 flags;
++	__u64 addr;
++	__u32 len;
++	__u32 reserved;
++	__u64 data;
++};
++
++/**
++ * Contains the specific parameters of a irqfd request
++ * @fd: The file descriptor of the eventfd
++ * @flags: The flags of the eventfd
++ */
++struct bao_irqfd {
++	__s32 fd;
++	__u32 flags;
++};
++
++/* The ioctl type, listed in Documentation/userspace-api/ioctl/ioctl-number.rst */
++#define BAO_IOCTL_TYPE 0xA6
++
++/*
++ * Common IOCTL IDs definition for Bao userspace
++ * Follows the convention of the Linux kernel, listed in Documentation/driver-api/ioctl.rst
++ */
++#define BAO_IOCTL_DM_VIRTIO_BACKEND_CREATE _IOW(BAO_IOCTL_TYPE, 0x01, __u32)
++#define BAO_IOCTL_DM_VIRTIO_BACKEND_DESTROY _IOW(BAO_IOCTL_TYPE, 0x02, __u32)
++
++#define BAO_IOCTL_IO_CREATE_CLIENT _IO(BAO_IOCTL_TYPE, 0x03)
++#define BAO_IOCTL_IO_DESTROY_CLIENT _IO(BAO_IOCTL_TYPE, 0x04)
++#define BAO_IOCTL_IO_ATTACH_CLIENT _IO(BAO_IOCTL_TYPE, 0x05)
++
++#define BAO_IOCTL_IO_REQUEST _IOWR(BAO_IOCTL_TYPE, 0x06, struct bao_virtio_request)
++#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED \
++	_IOW(BAO_IOCTL_TYPE, 0x07, struct bao_virtio_request)
++#define BAO_IOCTL_IO_NOTIFY_GUEST _IO(BAO_IOCTL_TYPE, 0x08)
++
++#define BAO_IOCTL_IOEVENTFD _IOW(BAO_IOCTL_TYPE, 0x09, struct bao_ioeventfd)
++#define BAO_IOCTL_IRQFD _IOW(BAO_IOCTL_TYPE, 0x0A, struct bao_irqfd)
++
++#define BAO_IOCTL_IO_REQUEST_QEMU _IOWR(BAO_IOCTL_TYPE, 0x0B, struct bao_virtio_request)
++#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED_QEMU \
++	_IOW(BAO_IOCTL_TYPE, 0x0C, struct bao_virtio_request)
++
++#endif /* _UAPI_BAO_H */
+\ No newline at end of file
