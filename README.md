@@ -92,10 +92,10 @@ For the VM frontend you can use any kernel that has VirtIO drivers for the devic
 
 Presented below is a table detailing the description of each demo alongside its respective target platform.
 
-|  Demo                   | PLATFORM            |  ARCH |
-| ------------------- | ----------------- | --- |
-| [Two Linux Guests accessing the same console](demo-1/README.md) | QEMU   | aarch64 |
-| [A Linux Guest with network and storage interface](demo-2/README.md)     | QEMU            | aarch64 |
-| [A Linux Guest with virtual filesystem interface](demo-3/README.md)       | QEMU            | aarch64 |
-| [Two Linux Guests accessing the same network interface](demo-4/README.md)    | ZCU102/4    | aarch64 |
-| [Inter-VM communication using Virtual Sockets](demo-5/README.md)    | ZCU102/4    | aarch64 |
+|  Demo                   | PLATFORM            |  ARCH | FRONTEND DEVICE MODEL |
+| ------------------- | ----------------- | --- | --- |
+| [Two Linux Guests accessing the same console](demo-1/README.md) | QEMU   | aarch64 | QEMU |
+| [A Linux Guest with network and storage interface](demo-2/README.md)     | QEMU            | aarch64 | QEMU |
+| [A Linux Guest with virtual filesystem interface](demo-3/README.md)       | QEMU            | aarch64 | Bao VirtIO (Rust) |
+| [Two Linux Guests accessing the same network interface](demo-4/README.md)    | ZCU102/4    | aarch64 | Bao VirtIO (Rust) |
+| [Inter-VM communication using Virtual Sockets](demo-5/README.md)    | ZCU102/4    | aarch64 | Bao VirtIO (Rust) |
