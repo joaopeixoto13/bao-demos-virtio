@@ -88,17 +88,17 @@ Once logged into the **Backend VM**, you have two options available for launchin
 To execute the launch in **distinct** QEMU processes, run the following commands:
 
 ```
-nohup qemu-system-aarch64 -nographic -object memory-backend-file,id=virt.ram,size=16M,mem-path=/dev/baoipc0,offset=0,share=on -machine virt,memory-backend=virt.ram,virtualization=on -cpu cortex-a53 -smp 1 -accel bao -device virtio-serial-device,iommu_platform=on,max_ports=1 -chardev pty,id=serial-bao-1 -device virtconsole,chardev=serial-bao-1 -global virtio-mmio.force-legacy=false -bao vm_id=0,irq=47,ram_addr=536870912,ram_size=16777216 > /etc/log-serial-1 2>&1 &
+nohup qemu-system-aarch64 -nographic -object memory-backend-file,id=virt.ram,size=16M,mem-path=/dev/baoipc0,offset=0,share=on -machine virt,memory-backend=virt.ram,virtualization=on -cpu cortex-a53 -smp 1 -accel bao -device virtio-serial-device,iommu_platform=on,max_ports=1 -chardev pty,id=serial-bao-1 -device virtconsole,chardev=serial-bao-1 -global virtio-mmio.force-legacy=false -bao dm_id=0,irq=47,shmem_addr=536870912,shmem_size=16777216 > /etc/log-serial-1 2>&1 &
 ```
 
 ```
-nohup qemu-system-aarch64 -nographic -object memory-backend-file,id=virt.ram,size=16M,mem-path=/dev/baoipc1,offset=0,share=on -machine virt,memory-backend=virt.ram,virtualization=on -cpu cortex-a53 -smp 1 -accel bao -device virtio-serial-device,iommu_platform=on,max_ports=1 -chardev pty,id=serial-bao-2 -device virtconsole,chardev=serial-bao-2 -global virtio-mmio.force-legacy=false -bao vm_id=1,irq=47,ram_addr=553648128,ram_size=16777216 > /etc/log-serial-2 2>&1 &
+nohup qemu-system-aarch64 -nographic -object memory-backend-file,id=virt.ram,size=16M,mem-path=/dev/baoipc1,offset=0,share=on -machine virt,memory-backend=virt.ram,virtualization=on -cpu cortex-a53 -smp 1 -accel bao -device virtio-serial-device,iommu_platform=on,max_ports=1 -chardev pty,id=serial-bao-2 -device virtconsole,chardev=serial-bao-2 -global virtio-mmio.force-legacy=false -bao dm_id=1,irq=47,shmem_addr=553648128,shmem_size=16777216 > /etc/log-serial-2 2>&1 &
 ```
 
 To initiate a **single** QEMU process to manage the two VirtIO backends, run the command:
 
 ```
-nohup qemu-system-aarch64 -nographic -object memory-backend-file,id=virt.ram,size=32M,mem-path=/dev/baoipc0,offset=0,share=on -machine virt,memory-backend=virt.ram,virtualization=on -cpu cortex-a53 -smp 1 -accel bao -device virtio-serial-device,iommu_platform=on,max_ports=1 -chardev pty,id=serial-bao-1 -device virtconsole,chardev=serial-bao-1 -device virtio-serial-device,iommu_platform=on,max_ports=1 -chardev pty,id=serial-bao-2 -device virtconsole,chardev=serial-bao-2 -global virtio-mmio.force-legacy=false -bao vm_id=0-1,irq=47-46,ram_addr=536870912-553648128,ram_size=16777216-16777216 > /etc/log-serials 2>&1 &
+nohup qemu-system-aarch64 -nographic -object memory-backend-file,id=virt.ram,size=32M,mem-path=/dev/baoipc0,offset=0,share=on -machine virt,memory-backend=virt.ram,virtualization=on -cpu cortex-a53 -smp 1 -accel bao -device virtio-serial-device,iommu_platform=on,max_ports=1 -chardev pty,id=serial-bao-1 -device virtconsole,chardev=serial-bao-1 -device virtio-serial-device,iommu_platform=on,max_ports=1 -chardev pty,id=serial-bao-2 -device virtconsole,chardev=serial-bao-2 -global virtio-mmio.force-legacy=false -bao dm_id=0-1,irq=47-46,shmem_addr=536870912-553648128,shmem_size=16777216-16777216 > /etc/log-serials 2>&1 &
 ```
 
 **Note**: The `nohup <command> > /etc/log-file 2>&1 &` command is utilized to execute a program in the background while redirecting both `stderr` and `stdout` outputs to the specified file.

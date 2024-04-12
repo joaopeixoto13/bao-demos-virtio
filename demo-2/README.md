@@ -142,7 +142,7 @@ For simplicity, let's use the second approach. However, if you want to launch tw
 
 Run the command:
 ```
-nohup qemu-system-aarch64 -nographic -object memory-backend-file,id=virt.ram,size=32M,mem-path=/dev/baoipc0,offset=0,share=on -machine virt,memory-backend=virt.ram,virtualization=on -cpu cortex-a53 -smp 1 -accel bao -device virtio-blk-device,drive=drive2,id=virtblk1,iommu_platform=on -drive file=/etc/ext4_mountpoint/ext4_frontend_vm_image.img,id=drive2,if=none,format=raw -device virtio-net-device,netdev=net1,iommu_platform=on -netdev user,id=net1,net=192.168.43.0/24,hostfwd=tcp:127.0.0.1:5555-:22 -global virtio-mmio.force-legacy=false -bao vm_id=0-1,irq=47-46,ram_addr=536870912-553648128,ram_size=16777216-16777216 > /etc/log-blk-net 2>&1 &
+nohup qemu-system-aarch64 -nographic -object memory-backend-file,id=virt.ram,size=32M,mem-path=/dev/baoipc0,offset=0,share=on -machine virt,memory-backend=virt.ram,virtualization=on -cpu cortex-a53 -smp 1 -accel bao -device virtio-blk-device,drive=drive2,id=virtblk1,iommu_platform=on -drive file=/etc/ext4_mountpoint/ext4_frontend_vm_image.img,id=drive2,if=none,format=raw -device virtio-net-device,netdev=net1,iommu_platform=on -netdev user,id=net1,net=192.168.43.0/24,hostfwd=tcp:127.0.0.1:5555-:22 -global virtio-mmio.force-legacy=false -bao dm_id=0-1,irq=47-46,shmem_addr=536870912-553648128,shmem_size=16777216-16777216 > /etc/log-blk-net 2>&1 &
 ```
 
 Once logged into the **Frontend VM**, create a directory to mount the partition:

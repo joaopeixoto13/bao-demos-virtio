@@ -49,10 +49,10 @@ Override the Linux source directory:
 export LINUX_OVERRIDE_SRCDIR=/path/to/your/linux
 ```
 
-To integrate the I/O Request Management System into Linux, apply the designated [patch](0001-linux-v6.5-backend-io-request-managment-system.patch):
+To integrate the I/O Request Management System into Linux, apply the designated [patch](0001-linux-v6.5-backend-dispatcher-io.patch):
 
 ```
-git apply 0001-linux-v6.5-backend-io-request-managment-system.patch
+git apply 0001-linux-v6.5-backend-dispatcher-io.patch
 ```
 
 ---
