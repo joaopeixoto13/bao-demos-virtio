@@ -28,8 +28,16 @@ git clone git@github.com:buildroot/buildroot.git /path/to/your/buildroot --depth
 cd /path/to/your/buildroot
 ```
 
-Use the provided [buildroot defconfig](buildroot-v6.5-backend.config), or use one at your own risk:
+There are availble two buildroot defconfig files:
 
+1. A [defconfig](buildroot-v6.5-backend-initramfs.config) with `INTRAMFS` enabled;
+2. A [defconfig](buildroot-v6.5-backend-without-initramfs.config) with `INTRAMFS` disabled. This defcondig can be used if you want your Linux filesystem to be placed, for example, directly onto an SD Card (in this case you should untar the generated filesystem under `output/images/rootfs.tar` onto your SD Card root partition).
+
+Before applying the defoconfig changes, edit the `BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE` entry to include your [Linux configuration](linux-v6.5-backend.config) config file path. 
+
+If you want to manually configure your Linux, you must enable the option **BAO_VIRTIO**. To enable this feature, type `make linux-menuconfig` and navigating to: `Device Drivers > Virtualization Drivers > Bao Hypervisor Module for VirtIO`.
+
+Apply the buildroot defconfig changes:
 ```
 make defconfig BR2_DEFCONFIG=/path/to/your/defconfig
 ```
@@ -57,28 +65,9 @@ git apply 0001-linux-v6.5-backend-dispatcher-io.patch
 
 ---
 
-### 2.3 First Build
+### 2.3 Build
 
 Build buildroot:
-
-```
-make -j$(nproc)
-```
-
-### 2.4 Second Build
-
-After building Linux, you have two options: Utilize the provided [Linux configuration](linux-v6.5-backend.config) or manually configure yours. If you want to use the provided configuration, first you need to copy the configuration file to the linux-custom directory, rename the file to .config and apply the changes:
-```
-cp /path/to/your/linux-v6.5-backend.config /path/to/your/buildroot/output/build/linux-custom/.config
-cd /path/to/your/buildroot && make olddefconfig
-```
-
-If you want to manually configure your Linux, you must enable two options:
-1. The **BAO_VIRTIO** driver, used to manage all VirtIO requests from the associated Backend VM. To enable this feature, type `make linux-menuconfig` and navigating to: `Device Drivers > Virtualization Drivers > Bao Hypervisor Module for VirtIO`. Upon selecting the aforementioned driver, the system should automatically enable the `Bao Hypervisor I/O Request System configured by Interrupts`.
-
-2. The **BAO_SHMEM** driver, used to enable the IPC channel between the frontend and the backend VMs. Select `Device Drivers > Bao shared memory support`
-
-Build buildroot again:
 
 ```
 make -j$(nproc)
