@@ -3,8 +3,7 @@
 This tutorial endeavors to demonstrate the sequential steps required to construct and activate peripheral sharing on the [Bao Hypervisor](https://github.com/bao-project/bao-hypervisor) using the VirtIO interface.
 
 **Notes**:
-- The infrastructure is still in the development phase and is only being tested for ARM platforms (QEMU and ZCU102).
-- For physical boards (e.g. ZCU102), there is a problem already identified when the Frontend VM's CPU goes to the idle state, as a result of the trap process and MMIO emulation. In this scenario, currently (March 28 2024) Bao Hypervisor is unable to save the state of the registers before powering off. However, there is work underway to implement a standby mechanism. To temporarily resolve this problem, in the `cpu_arch_profile_idle` function replace the `psci_power_down` call with a simple `asm volatile("wfi")`
+- The infrastructure is still in the development phase and is only being tested for ARM platforms (QEMU and ZCU102)
 - These demo tutorials may contain errors/inaccuracies, as they are continually being updated
 
 For any questions regarding the infrastructure, correction of an error in the tutorials or even any improvement/contribution to the VirtIO infrastructure itself, please send an email to <joaopeixotooficial@gmail.com>.
