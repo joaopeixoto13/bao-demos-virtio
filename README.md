@@ -67,10 +67,10 @@ git apply 0001-linux-v6.5-backend-dispatcher-io.patch
 
 ### 2.3 Build
 
-Build buildroot:
+Build your system with:
 
 ```
-make -j$(nproc)
+make linux-reconfigure all -j$(nproc)
 ```
 
 ## 3. Setup the VirtIO Frontend VM
