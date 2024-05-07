@@ -39,14 +39,13 @@ struct config config = {
                     }
                 },
 
-                .remote_io_dev_num = 2,                             
-                .remote_io_interrupt = 40,                             
+                .remote_io_dev_num = 2,                                                          
                 .remote_io_pooling = false,                           
                 .remote_io_devs = (struct remote_io_dev[]) {
                     {
-                        .remote_io_id = 0,
-                        .is_back_end = true,
-                        .device_type = 1,
+                        .id = 0,
+                        .is_backend = true,
+                        .interrupt = 40,
                         .shmem = {
                             .base = 0x20000000,
                             .size = 0x01000000,
@@ -54,9 +53,9 @@ struct config config = {
                         }
                     },
                     {
-                        .remote_io_id = 1,
-                        .is_back_end = true,
-                        .device_type = 2,
+                        .id = 1,
+                        .is_backend = true,
+                        .interrupt = 2,
                         .shmem = {
                             .base = 0x21000000,
                             .size = 0x01000000,
@@ -126,11 +125,11 @@ struct config config = {
                 .remote_io_dev_num = 2,
                 .remote_io_devs = (struct remote_io_dev[]) {
                     {
-                        .remote_io_id = 0,
-                        .is_back_end = false,
+                        .id = 0,
+                        .is_backend = false,
                         .size = 0x200,                              
                         .va = 0xa003e00,                            
-                        .device_interrupt = 79,                     
+                        .interrupt = 79,                     
                         .shmem = {
                             .base = 0x20000000,
                             .size = 0x01000000,
@@ -138,11 +137,11 @@ struct config config = {
                         }
                     },
                     {
-                        .remote_io_id = 1,
-                        .is_back_end = false,
+                        .id = 1,
+                        .is_backend = false,
                         .size = 0x200,                              
                         .va = 0xa003c00,                            
-                        .device_interrupt = 78,                     
+                        .interrupt = 78,                     
                         .shmem = {
                             .base = 0x21000000,
                             .size = 0x01000000,
