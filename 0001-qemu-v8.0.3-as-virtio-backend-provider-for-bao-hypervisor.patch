@@ -20,10 +20,10 @@ index 8bdedb7d1..3d9dc6fcf 100644
      select FSDEV_9P if VIRTFS
 diff --git a/accel/bao/bao-all.c b/accel/bao/bao-all.c
 new file mode 100644
-index 000000000..a33937a90
+index 000000000..441d8eb5a
 --- /dev/null
 +++ b/accel/bao/bao-all.c
-@@ -0,0 +1,648 @@
+@@ -0,0 +1,650 @@
 +/*
 + * QEMU Hypervisor.framework (Bao) support
 + *
@@ -307,10 +307,12 @@ index 000000000..a33937a90
 +
 +        // fill the VirtIO request with zeros
 +        s->dm.req.virtio_id = 0x0;
-+        s->dm.req.reg_off = 0x0;
++        s->dm.req.addr = 0x0;
 +        s->dm.req.op = BAO_IO_ASK;
 +        s->dm.req.value = 0x0;
 +        s->dm.req.access_width = 0x0;
++        s->dm.req.cpu_id = 0x0;
++        s->dm.req.vcpu_id = 0x0;
 +        s->dm.req.ret = 0x0;
 +
 +        // request the VirtIO request
@@ -675,10 +677,10 @@ index 000000000..a33937a90
 \ No newline at end of file
 diff --git a/accel/bao/ioreq-api.h b/accel/bao/ioreq-api.h
 new file mode 100644
-index 000000000..951bad38c
+index 000000000..6f2424dd6
 --- /dev/null
 +++ b/accel/bao/ioreq-api.h
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,221 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao VirtIO Backend DM I/O Request API
@@ -708,7 +710,6 @@ index 000000000..951bad38c
 +
 +struct bao_virtio_request {
 +	uint64_t virtio_id;
-+	uint64_t reg_off;
 +	uint64_t addr;
 +	uint64_t op;
 +	uint64_t value;
