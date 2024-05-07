@@ -12,10 +12,10 @@ index 4ea5b8373..a157b9e3b 100644
  0xAC  00-1F  linux/raw.h
 diff --git a/arch/arm/include/asm/bao.h b/arch/arm/include/asm/bao.h
 new file mode 100644
-index 000000000..595a211fb
+index 000000000..6b8bd49ba
 --- /dev/null
 +++ b/arch/arm/include/asm/bao.h
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,66 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Hypercall for Bao Hypervisor on ARM
@@ -37,8 +37,7 @@ index 000000000..595a211fb
 + * asm_bao_virtio_hypercall() - Performs a VirtIO Hypercall
 + * @virtio_hc_id: VirtIO Hypercall ID
 + * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
-+ * @reg_off: Gives the offset of the MMIO Register that was accessed
-+ * @addr: Address of the I/O range
++ * @addr: Access address
 + * @op:	Write, Read, Ask or Notify operation
 + * @value: Value to write or read
 + * @cpu_id: CPU ID
@@ -46,40 +45,38 @@ index 000000000..595a211fb
 + *
 + * Returns: The VirtIO request structure
 + */
-+static inline struct bao_virtio_request asm_bao_virtio_hypercall(u64 virtio_hc_id,
-+							  u64 virtio_id,
-+							  u64 reg_off, u64 addr,
-+							  u64 op, u64 value, u64 cpu_id, u64 vcpu_id)
++static inline struct bao_virtio_request
++asm_bao_virtio_hypercall(u64 virtio_hc_id, u64 virtio_id, u64 addr, u64 op,
++			 u64 value, u64 cpu_id, u64 vcpu_id)
 +{
-+	register u32 x0 asm("r0") = ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,
-+                ARM_SMCCC_SMC_64, ARM_SMCCC_OWNER_VENDOR_HYP, virtio_hc_id);
++	register int x0 asm("r0") =
++		ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_64,
++				   ARM_SMCCC_OWNER_VENDOR_HYP, virtio_hc_id);
 +	register u32 x1 asm("r1") = virtio_hc_id;
 +	register u32 x2 asm("r2") = virtio_id;
-+	register u32 x3 asm("r3") = reg_off;
-+	register u32 x4 asm("r4") = addr;
-+	register u32 x5 asm("r5") = op;
-+	register u32 x6 asm("r6") = value;
-+	register u32 x7 asm("r7") = cpu_id;
-+	register u32 x8 asm("r8") = vcpu_id;
++	register u32 x3 asm("r3") = addr;
++	register u32 x4 asm("r4") = op;
++	register u32 x5 asm("r5") = value;
++	register u32 x6 asm("r6") = cpu_id;
++	register u32 x7 asm("r7") = vcpu_id;
 +
 +	struct bao_virtio_request ret;
 +
 +	asm volatile("hvc 0\n\t"
 +		     : "=r"(x0), "=r"(x1), "=r"(x2), "=r"(x3), "=r"(x4),
-+		       "=r"(x5), "=r"(x6), "=r"(x7), "=r"(x8)
++		       "=r"(x5), "=r"(x6), "=r"(x7)
 +		     : "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5),
-+		       "r"(x6), "r"(x7), "r"(x8)
++		       "r"(x6), "r"(x7)
 +		     : "memory");
 +
 +	ret.ret = x0;
 +	ret.virtio_id = x1;
-+	ret.reg_off = x2;
-+	ret.addr = x3;
-+	ret.op = x4;
-+	ret.value = x5;
-+	ret.access_width = x6;
-+	ret.cpu_id = x7;
-+	ret.vcpu_id = x8;
++	ret.addr = x2;
++	ret.op = x3;
++	ret.value = x4;
++	ret.access_width = x5;
++	ret.cpu_id = x6;
++	ret.vcpu_id = x7;
 +
 +	return ret;
 +}
@@ -88,10 +85,10 @@ index 000000000..595a211fb
 \ No newline at end of file
 diff --git a/arch/arm64/include/asm/bao.h b/arch/arm64/include/asm/bao.h
 new file mode 100644
-index 000000000..94c07f262
+index 000000000..f094f4811
 --- /dev/null
 +++ b/arch/arm64/include/asm/bao.h
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,66 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Hypercall for Bao Hypervisor on ARM64
@@ -113,8 +110,7 @@ index 000000000..94c07f262
 + * asm_bao_virtio_hypercall() - Performs a VirtIO Hypercall
 + * @virtio_hc_id: VirtIO Hypercall ID
 + * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
-+ * @reg_off: Gives the offset of the MMIO Register that was accessed
-+ * @addr: Address of the I/O range
++ * @addr: Access address
 + * @op:	Write, Read, Ask or Notify operation
 + * @value: Value to write or read
 + * @cpu_id: CPU ID
@@ -122,40 +118,38 @@ index 000000000..94c07f262
 + *
 + * Returns: The VirtIO request structure
 + */
-+static inline struct bao_virtio_request asm_bao_virtio_hypercall(u64 virtio_hc_id,
-+							  u64 virtio_id,
-+							  u64 reg_off, u64 addr,
-+							  u64 op, u64 value, u64 cpu_id, u64 vcpu_id)
++static inline struct bao_virtio_request
++asm_bao_virtio_hypercall(u64 virtio_hc_id, u64 virtio_id, u64 addr, u64 op,
++			 u64 value, u64 cpu_id, u64 vcpu_id)
 +{
-+	register u64 x0 asm("x0") = ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,
-+                ARM_SMCCC_SMC_64, ARM_SMCCC_OWNER_VENDOR_HYP, virtio_hc_id);
++	register int x0 asm("x0") =
++		ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_64,
++				   ARM_SMCCC_OWNER_VENDOR_HYP, virtio_hc_id);
 +	register u64 x1 asm("x1") = virtio_hc_id;
 +	register u64 x2 asm("x2") = virtio_id;
-+	register u64 x3 asm("x3") = reg_off;
-+	register u64 x4 asm("x4") = addr;
-+	register u64 x5 asm("x5") = op;
-+	register u64 x6 asm("x6") = value;
-+	register u64 x7 asm("x7") = cpu_id;
-+	register u64 x8 asm("x8") = vcpu_id;
++	register u64 x3 asm("x3") = addr;
++	register u64 x4 asm("x4") = op;
++	register u64 x5 asm("x5") = value;
++	register u64 x6 asm("x6") = cpu_id;
++	register u64 x7 asm("x7") = vcpu_id;
 +
 +	struct bao_virtio_request ret;
 +
 +	asm volatile("hvc 0\n\t"
 +		     : "=r"(x0), "=r"(x1), "=r"(x2), "=r"(x3), "=r"(x4),
-+		       "=r"(x5), "=r"(x6), "=r"(x7), "=r"(x8)
++		       "=r"(x5), "=r"(x6), "=r"(x7)
 +		     : "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5),
-+		       "r"(x6), "r"(x7), "r"(x8)
++		       "r"(x6), "r"(x7)
 +		     : "memory");
 +
 +	ret.ret = x0;
 +	ret.virtio_id = x1;
-+	ret.reg_off = x2;
-+	ret.addr = x3;
-+	ret.op = x4;
-+	ret.value = x5;
-+	ret.access_width = x6;
-+	ret.cpu_id = x7;
-+	ret.vcpu_id = x8;
++	ret.addr = x2;
++	ret.op = x3;
++	ret.value = x4;
++	ret.access_width = x5;
++	ret.cpu_id = x6;
++	ret.vcpu_id = x7;
 +
 +	return ret;
 +}
@@ -164,10 +158,10 @@ index 000000000..94c07f262
 \ No newline at end of file
 diff --git a/arch/riscv/include/asm/bao.h b/arch/riscv/include/asm/bao.h
 new file mode 100644
-index 000000000..85b96ca7f
+index 000000000..dbdd646e1
 --- /dev/null
 +++ b/arch/riscv/include/asm/bao.h
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,63 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Hypercall for Bao Hypervisor on RISC-V
@@ -188,8 +182,7 @@ index 000000000..85b96ca7f
 + * asm_bao_virtio_hypercall() - Performs a VirtIO Hypercall
 + * @virtio_hc_id: VirtIO Hypercall ID
 + * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
-+ * @reg_off: Gives the offset of the MMIO Register that was accessed
-+ * @addr: Address of the I/O range
++ * @addr: Access address
 + * @op:	Write, Read, Ask or Notify operation
 + * @value: Value to write or read
 + * @cpu_id: CPU ID
@@ -197,37 +190,36 @@ index 000000000..85b96ca7f
 + *
 + * Returns: The VirtIO request structure
 + */
-+static inline struct bao_virtio_request asm_bao_virtio_hypercall(u64 virtio_hc_id,
-+							  u64 virtio_id,
-+							  u64 reg_off, u64 addr,
-+							  u64 op, u64 value, u64 cpu_id, u64 vcpu_id)
++static inline struct bao_virtio_request
++asm_bao_virtio_hypercall(u64 virtio_hc_id, u64 virtio_id, u64 addr, u64 op,
++			 u64 value, u64 cpu_id, u64 vcpu_id)
 +{
-+    struct bao_virtio_request ret;
++	struct bao_virtio_request ret;
 +
-+	register uintptr_t a0 asm ("a0") = (uintptr_t)(0x08000ba0);
-+	register uintptr_t a1 asm ("a1") = (uintptr_t)(virtio_hc_id);
-+	register uintptr_t a2 asm ("a2") = (uintptr_t)(virtio_id);
-+	register uintptr_t a3 asm ("a3") = (uintptr_t)(reg_off);
-+	register uintptr_t a4 asm ("a4") = (uintptr_t)(addr);
-+	register uintptr_t a5 asm ("a5") = (uintptr_t)(op);
-+	register uintptr_t a6 asm ("a6") = (uintptr_t)(value);
-+	register uintptr_t a7 asm ("a7") = (uintptr_t)(cpu_id);
-+	register uintptr_t a8 asm ("a8") = (uintptr_t)(vcpu_id);
-+	
-+    asm volatile ("ecall"
-+		      : "+r" (a0), "+r" (a1), "+r" (a2), "+r" (a3), "+r" (a4), "+r" (a5), "+r" (a6), "+r" (a7), "+r" (a8)
-+		      : "r" (a0), "r" (a1), "r" (a2), "r" (a3), "r" (a4), "r" (a5), "r" (a6), "r" (a7), "r" (a8)
-+		      : "memory");
-+	
++	register intptr_t a0 asm("a0") = (uintptr_t)(0x08000ba0);
++	register uintptr_t a1 asm("a1") = (uintptr_t)(virtio_hc_id);
++	register uintptr_t a2 asm("a2") = (uintptr_t)(virtio_id);
++	register uintptr_t a3 asm("a3") = (uintptr_t)(addr);
++	register uintptr_t a4 asm("a4") = (uintptr_t)(op);
++	register uintptr_t a5 asm("a5") = (uintptr_t)(value);
++	register uintptr_t a6 asm("a6") = (uintptr_t)(cpu_id);
++	register uintptr_t a7 asm("a7") = (uintptr_t)(vcpu_id);
++
++	asm volatile("ecall"
++		     : "+r"(a0), "+r"(a1), "+r"(a2), "+r"(a3), "+r"(a4),
++		       "+r"(a5), "+r"(a6), "+r"(a7)
++		     : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5),
++		       "r"(a6), "r"(a7)
++		     : "memory");
++
 +	ret.ret = a0;
 +	ret.virtio_id = a1;
-+	ret.reg_off = a2;
-+	ret.addr = a3;
-+	ret.op = a4;
-+	ret.value = a5;
-+	ret.access_width = a6;
-+	ret.cpu_id = a7;
-+	ret.vcpu_id = a8;
++	ret.addr = a2;
++	ret.op = a3;
++	ret.value = a4;
++	ret.access_width = a5;
++	ret.cpu_id = a6;
++	ret.vcpu_id = a7;
 +
 +	return ret;
 +}
@@ -641,13 +633,14 @@ index e9aa6fc96..74abecf75 100644
 \ No newline at end of file
 diff --git a/drivers/virt/bao/Kconfig b/drivers/virt/bao/Kconfig
 new file mode 100644
-index 000000000..2488bbb0d
+index 000000000..aaeb97934
 --- /dev/null
 +++ b/drivers/virt/bao/Kconfig
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,25 @@
 +# SPDX-License-Identifier: GPL-2.0
 +config BAO_VIRTIO
 +	tristate "Bao Hypervisor Module for VirtIO"
++	depends on BAO_SHMEM
 +	help
 +	  The Bao Hypervisor Module for VirtIO represents a kernel 
 +	  module that interfaces with userspace applications via ioctls, 
@@ -682,7 +675,7 @@ index 000000000..9b23b0a69
 \ No newline at end of file
 diff --git a/drivers/virt/bao/bao_drv.h b/drivers/virt/bao/bao_drv.h
 new file mode 100644
-index 000000000..b199c2118
+index 000000000..f172a8a3d
 --- /dev/null
 +++ b/drivers/virt/bao/bao_drv.h
 @@ -0,0 +1,311 @@
@@ -739,6 +732,8 @@ index 000000000..b199c2118
 + * @list: List node for this bao_io_client
 + * @is_control:	If this client is the control client
 + * @flags: Flags (BAO_IO_CLIENT_*)
++ * @virtio_requests: Array of all I/O requests that are free to process
++ * @virtio_requests_lock: Lock to protect virtio_requests list
 + * @range_list:	I/O ranges
 + * @range_lock:	Lock to protect range_list
 + * @io_req_map:	The pending I/O requests bitmap
@@ -753,6 +748,8 @@ index 000000000..b199c2118
 +	struct list_head list;
 +	bool is_control;
 +	unsigned long flags;
++	struct list_head virtio_requests;
++	rwlock_t virtio_requests_lock;
 +	struct list_head range_list;
 +	rwlock_t range_lock;
 +	DECLARE_BITMAP(io_req_map, BAO_IO_REQUEST_MAX);
@@ -767,8 +764,6 @@ index 000000000..b199c2118
 + * @list: Entry within global list of all DMs
 + * @id: DM ID (Used to handle the I/O ID, responsible to connect each frontend driver to the backend device)
 + * @flags: Flags (BAO_VIRTIO_DM_*)
-+ * @virtio_requests: Array of all I/O requests that are free to process
-+ * @virtio_requests_lock: Lock to protect virtio_requests list
 + * @ioeventfds: List to link all bao_ioeventfd
 + * @ioeventfds_lock: Lock to protect ioeventfds list
 + * @ioeventfd_client: I/O client for ioeventfds of the DM
@@ -783,8 +778,6 @@ index 000000000..b199c2118
 +	struct list_head list;
 +	__u32 id;
 +	unsigned long flags;
-+	struct list_head virtio_requests;
-+	struct mutex virtio_requests_lock;
 +	struct list_head ioeventfds;
 +	struct mutex ioeventfds_lock;
 +	struct bao_io_client *ioeventfd_client;
@@ -1000,10 +993,10 @@ index 000000000..b199c2118
 \ No newline at end of file
 diff --git a/drivers/virt/bao/dispatcher_io.c b/drivers/virt/bao/dispatcher_io.c
 new file mode 100644
-index 000000000..82c8be178
+index 000000000..f4af669fa
 --- /dev/null
 +++ b/drivers/virt/bao/dispatcher_io.c
-@@ -0,0 +1,768 @@
+@@ -0,0 +1,764 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao Hypervisor Dispatcher I/O
@@ -1047,12 +1040,12 @@ index 000000000..82c8be178
 +
 +/**
 + * Backup the I/O requests from the Bao Hypervisor
-+ * @dm: The DM that the I/O request belongs to
++ * @dm: The Client that the I/O request belongs to
 + * @note: When a new DM is created, to ensure that the I/O requests are not lost,
 + * the I/O requests are backed up (e.g. when the Dispatcher I/O is driven by Interrupts, 
 + * if the Frontend VM starts first than the Backend VM the interrupt signal will be lost)
 + */
-+static void dispatcher_io_backup(struct bao_io_dm *dm);
++static int dispatcher_io_backup(struct bao_io_client *dm);
 +
 +/**
 + * Pause the I/O requests dispatching 
@@ -1182,16 +1175,16 @@ index 000000000..82c8be178
 +
 +/**
 + * Add the I/O request to the list
-+ * @client: The DM that the I/O request belongs to
++ * @client: The Client that the I/O request belongs to
 + * @req: The I/O request to be added
 + */
-+static void bao_io_push_request(struct bao_io_dm *dm,
++static void bao_io_push_request(struct bao_io_client *client,
 +				struct bao_io_request *req)
 +{
 +	// add the request to the end of the requests list
-+	mutex_lock(&dm->virtio_requests_lock);
-+	list_add_tail(&req->list, &dm->virtio_requests);
-+	mutex_unlock(&dm->virtio_requests_lock);
++	write_lock_bh(&client->virtio_requests_lock);
++	list_add_tail(&req->list, &client->virtio_requests);
++	write_unlock_bh(&client->virtio_requests_lock);
 +}
 +
 +/**
@@ -1205,12 +1198,11 @@ index 000000000..82c8be178
 +	struct bao_io_request *req;
 +	int ret_val = -EFAULT;
 +
-+	// lock the mutex
-+	mutex_lock(&client->dm->virtio_requests_lock);
-+
 +	// pop the first request from the list
-+	req = list_first_entry_or_null(&client->dm->virtio_requests,
++	write_lock_bh(&client->virtio_requests_lock);
++	req = list_first_entry_or_null(&client->virtio_requests,
 +				       struct bao_io_request, list);
++	write_unlock_bh(&client->virtio_requests_lock);
 +
 +	// check if there are requests pending to be processed
 +	if (req == NULL) {
@@ -1222,13 +1214,13 @@ index 000000000..82c8be178
 +	*ret = *req;
 +
 +	// delete the request from the list
++	write_lock_bh(&client->virtio_requests_lock);
 +	list_del(&req->list);
++	write_unlock_bh(&client->virtio_requests_lock);
 +
 +	// free the request
 +	kfree(req);
 +
-+	// unlock the mutex
-+	mutex_unlock(&client->dm->virtio_requests_lock);
 +	ret_val = 0;
 +
 +	return ret_val;
@@ -1238,7 +1230,7 @@ index 000000000..82c8be178
 +	clear_bit(find_first_bit(client->io_req_map, BAO_IO_REQUEST_MAX),
 +		  client->io_req_map);
 +	// unlock the mutex
-+	mutex_unlock(&client->dm->virtio_requests_lock);
++	write_unlock_bh(&client->virtio_requests_lock);
 +	return ret_val;
 +}
 +
@@ -1258,7 +1250,7 @@ index 000000000..82c8be178
 +
 +	// notify the Hypervisor that the request was completed
 +	ret = bao_hypercall_virtio(
-+		req->virtio_request.virtio_id, req->virtio_request.reg_off,
++		req->virtio_request.virtio_id,
 +		req->virtio_request.addr, req->virtio_request.op,
 +		req->virtio_request.value, req->virtio_request.cpu_id,
 +		req->virtio_request.vcpu_id);
@@ -1327,6 +1319,8 @@ index 000000000..82c8be178
 +	if (name)
 +		strncpy(client->name, name, sizeof(client->name) - 1);
 +
++	rwlock_init(&client->virtio_requests_lock);
++	INIT_LIST_HEAD(&client->virtio_requests);
 +	rwlock_init(&client->range_lock);
 +	INIT_LIST_HEAD(&client->range_list);
 +	init_waitqueue_head(&client->wq);
@@ -1351,11 +1345,13 @@ index 000000000..82c8be178
 +
 +	// if the client is the control client, backup the I/O requests (if any)
 +	if (is_control)
-+		dispatcher_io_backup(dm);
++		while(dispatcher_io_backup(client) > 0);
 +
 +	// check if the control client have pending requests
-+	mutex_lock(&dm->virtio_requests_lock);
-+	if (!list_empty(&dm->virtio_requests) && is_control) {
++	read_lock_bh(&client->virtio_requests_lock);
++	int pending_requests = !list_empty(&client->virtio_requests);
++	read_unlock_bh(&client->virtio_requests_lock);
++	if (pending_requests && is_control) {
 +		next_avail_bit = next_availabe_bit(client);
 +		if (next_avail_bit != -EBUSY) {
 +			// set the next available bit in the client io_req_map
@@ -1367,13 +1363,11 @@ index 000000000..82c8be178
 +			goto err_unlock;
 +		}
 +	}
-+	mutex_unlock(&dm->virtio_requests_lock);
 +	spin_unlock_bh(&dm->io_clients_lock);
 +
 +	return client;
 +
 +err_unlock:
-+	mutex_unlock(&dm->virtio_requests_lock);
 +	spin_unlock_bh(&dm->io_clients_lock);
 +	return NULL;
 +}
@@ -1545,8 +1539,7 @@ index 000000000..82c8be178
 +	// update the request
 +	// the virtio_id is the id (since the bao_io_dm is an abstraction of a DM to handle I/O requests - I/O Backend DM)
 +	req->virtio_request.virtio_id = dm->id;
-+	// clear the reg_off and addr fields
-+	req->virtio_request.reg_off = 0;
++	// clear the addr field
 +	req->virtio_request.addr = 0;
 +	// BAO_IO_ASK will extract the I/O request from Bao Hypervisor
 +	req->virtio_request.op = BAO_IO_ASK;
@@ -1557,12 +1550,12 @@ index 000000000..82c8be178
 +
 +	// perform a Hypercall to get the I/O request from the Bao Hypervisor
 +	ret = bao_hypercall_virtio(
-+		req->virtio_request.virtio_id, req->virtio_request.reg_off,
++		req->virtio_request.virtio_id,
 +		req->virtio_request.addr, req->virtio_request.op,
 +		req->virtio_request.value, req->virtio_request.cpu_id,
 +		req->virtio_request.vcpu_id);
 +
-+	if (ret.ret != 0) {
++	if (ret.ret < 0) {
 +		rc = -EFAULT;
 +		goto err_unlock_1;
 +	}
@@ -1579,28 +1572,23 @@ index 000000000..82c8be178
 +	}
 +
 +	// find next available bit in the client io_req_map
-+	mutex_lock(&dm->virtio_requests_lock);
 +	next_avail_bit = next_availabe_bit(client);
 +	if (next_avail_bit == -EBUSY) {
 +		rc = -EBUSY;
-+		goto err_unlock_3;
++		goto err_unlock_2;
 +	}
-+	mutex_unlock(&dm->virtio_requests_lock);
 +
 +	// set the next available bit in the client io_req_map
 +	set_bit(next_avail_bit, client->io_req_map);
 +
 +	// add the request to the end of the virtio_request list
-+	bao_io_push_request(dm, req);
++	bao_io_push_request(client, req);
 +
 +	// wake up the handler thread
 +	wake_up_interruptible(&client->wq);
 +	spin_unlock_bh(&dm->io_clients_lock);
 +
-+	return 0;
-+
-+err_unlock_3:
-+	mutex_unlock(&dm->virtio_requests_lock);
++	return ret.ret;
 +
 +err_unlock_2:
 +	spin_unlock_bh(&dm->io_clients_lock);
@@ -1616,7 +1604,7 @@ index 000000000..82c8be178
 +	// for each DM, dispatch the I/O requests
 +	read_lock(&bao_dm_list_lock);
 +	list_for_each_entry(dm, &bao_dm_list, list) {
-+		dispatch_io(dm);
++		while(dispatch_io(dm) > 0);	// while there are requests to be processed
 +	}
 +	read_unlock(&bao_dm_list_lock);
 +}
@@ -1663,7 +1651,7 @@ index 000000000..82c8be178
 +}
 +#endif
 +
-+static void dispatcher_io_backup(struct bao_io_dm *dm)
++static int dispatcher_io_backup(struct bao_io_client *client)
 +{
 +	struct bao_virtio_request ret;
 +
@@ -1673,9 +1661,8 @@ index 000000000..82c8be178
 +
 +	// update the request
 +	// the virtio_id is the id (since the bao_io_dm is an abstraction of a DM to handle I/O requests - I/O Backend DM)
-+	req->virtio_request.virtio_id = dm->id;
-+	// clear the reg_off and addr fields
-+	req->virtio_request.reg_off = 0;
++	req->virtio_request.virtio_id = client->dm->id;
++	// clear the addr field
 +	req->virtio_request.addr = 0;
 +	// BAO_IO_ASK will peak the most priority request from Bao
 +	req->virtio_request.op = BAO_IO_ASK;
@@ -1686,22 +1673,24 @@ index 000000000..82c8be178
 +
 +	// perform a Hypercall to get the I/O request from the Bao Hypervisor
 +	ret = bao_hypercall_virtio(
-+		req->virtio_request.virtio_id, req->virtio_request.reg_off,
++		req->virtio_request.virtio_id,
 +		req->virtio_request.addr, req->virtio_request.op,
 +		req->virtio_request.value, req->virtio_request.cpu_id,
 +		req->virtio_request.vcpu_id);
 +
 +	// verify if there are requests pending to be processed
-+	if (ret.ret != 0) {
++	if (ret.ret < 0) {
 +		kfree(req);
-+		return;
++		return -1;
 +	}
 +
 +	// update the virtio request
 +	req->virtio_request = ret;
 +
 +	// add the request to the end of the virtio request avail list
-+	bao_io_push_request(dm, req);
++	bao_io_push_request(client, req);
++
++	return ret.ret;
 +}
 +
 +int bao_dispatcher_io_init(struct bao_io_dm *dm)
@@ -1775,10 +1764,10 @@ index 000000000..82c8be178
 \ No newline at end of file
 diff --git a/drivers/virt/bao/dm.c b/drivers/virt/bao/dm.c
 new file mode 100644
-index 000000000..4559ec05d
+index 000000000..25c8d626c
 --- /dev/null
 +++ b/drivers/virt/bao/dm.c
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,224 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao Hypervisor Backend Device Model (DM) for I/O
@@ -1908,8 +1897,6 @@ index 000000000..4559ec05d
 +	}
 +
 +	// initialize the DM structure
-+	INIT_LIST_HEAD(&dm->virtio_requests);
-+	mutex_init(&dm->virtio_requests_lock);
 +	INIT_LIST_HEAD(&dm->io_clients);
 +	spin_lock_init(&dm->io_clients_lock);
 +
@@ -1999,7 +1986,7 @@ index 000000000..4559ec05d
 +	struct bao_virtio_request ret;
 +
 +	// notify the Guest (Used Buffer Notification or Change Configuration Notification)
-+	ret = bao_hypercall_virtio(dm->id, 0, 0, BAO_IO_NOTIFY, 0, 0, 0);
++	ret = bao_hypercall_virtio(dm->id, 0, BAO_IO_NOTIFY, 0, 0, 0);
 +	if (ret.ret != 0) {
 +		return -EFAULT;
 +	}
@@ -2008,10 +1995,10 @@ index 000000000..4559ec05d
 \ No newline at end of file
 diff --git a/drivers/virt/bao/hypercall.h b/drivers/virt/bao/hypercall.h
 new file mode 100644
-index 000000000..93fcd78ea
+index 000000000..f0d0aea2f
 --- /dev/null
 +++ b/drivers/virt/bao/hypercall.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,39 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Hypercall API for Bao Hypervisor
@@ -2034,8 +2021,7 @@ index 000000000..93fcd78ea
 +/**
 + * bao_hypercall_virtio() - Performs a I/O Hypercall
 + * @virtio_id:	I/O ID (used to connect each frontend driver to the backend device)
-+ * @reg_off:	Gives the offset of the MMIO Register that was accessed
-+ * @addr:	Address of the I/O range
++ * @addr: Access address
 + * @op:		Write, Read, Ask or Notify operation
 + * @value:	Value to write or read
 + * @cpu_id:	Frontend CPU ID of the I/O request
@@ -2044,21 +2030,21 @@ index 000000000..93fcd78ea
 + * Returns: The I/O request structure
 + */
 +static inline struct bao_virtio_request
-+bao_hypercall_virtio(u64 virtio_id, u64 reg_off, u64 addr, u64 op, u64 value,
-+		     u64 cpu_id, u64 vcpu_id)
++bao_hypercall_virtio(u64 virtio_id, u64 addr, u64 op, u64 value, u64 cpu_id,
++		     u64 vcpu_id)
 +{
-+	return asm_bao_virtio_hypercall(VIRTIO_HC_ID, virtio_id, reg_off, addr, op,
-+				 value, cpu_id, vcpu_id);
++	return asm_bao_virtio_hypercall(VIRTIO_HC_ID, virtio_id, addr, op,
++					value, cpu_id, vcpu_id);
 +}
 +
 +#endif /* __BAO_HYPERCALL_H */
 \ No newline at end of file
 diff --git a/drivers/virt/bao/intc.c b/drivers/virt/bao/intc.c
 new file mode 100644
-index 000000000..78fff2ef0
+index 000000000..783e2b1d3
 --- /dev/null
 +++ b/drivers/virt/bao/intc.c
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,127 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao Hypervisor Interrupt Controller (INTC) for I/O
@@ -2075,8 +2061,13 @@ index 000000000..78fff2ef0
 +#include <linux/interrupt.h>
 +#include <linux/of_irq.h>
 +
-+// interrupt number
++#define BAO_VIRTIO_INTC_MAX_IRQS 16
++
++// number of configured interrupts
 +static int irq_number;
++
++// interrupt numbers
++static int irq_numbers[BAO_VIRTIO_INTC_MAX_IRQS];
 +
 +// handler for the interrupt
 +static void (*bao_intc_handler)(void);
@@ -2113,26 +2104,35 @@ index 000000000..78fff2ef0
 +{
 +	int ret;
 +
-+	// get the interrupt number from the device tree
-+	// TODO: If necessary, we can extend this to support multiple interrupts
-+	// (ideally, one per I/O device). This scenario should be worthy
-+	// when multiple I/O backends are attached to the same Backend VM.
-+	ret = platform_get_irq(pdev, 0);
++	// get the number of interrupts from the device tree
++	irq_number = platform_irq_count(pdev);
 +
-+	if (ret < 0) {
-+		dev_err(&pdev->dev, "Failed to read interrupt numbers\n");
-+		return ret;
++	if (irq_number < 0) {
++		dev_err(&pdev->dev, "Zero interrupts configured\n");
++		return irq_number;
++	}
++	if (irq_number > BAO_VIRTIO_INTC_MAX_IRQS) {
++		dev_err(&pdev->dev, "Too many interrupts\n");
++		return -EINVAL;
 +	}
 +
-+	// save the interrupt number
-+	irq_number = ret;
++	for (int i = 0; i < irq_number; i++) {
++		// get the interrupt number from the device tree
++		ret = platform_get_irq(pdev, i);
++		if (ret < 0) {
++			dev_err(&pdev->dev, "Failed to read interrupt numbers\n");
++			return ret;
++		}
++		// save the interrupt number
++		irq_numbers[i] = ret;
 +
-+	// request the interrupt to the kernel and register the handler
-+	ret = request_irq(irq_number, bao_interrupt_handler, IRQF_SHARED,
-+			  "bao-virtio-intc", pdev);
-+	if (ret) {
-+		dev_err(&pdev->dev, "Failed to request IRQ %d\n", irq_number);
-+		return ret;
++		// request the interrupt to the kernel and register the handler
++		ret = request_irq(irq_numbers[i], bao_interrupt_handler, 0,
++				"bao-virtio-intc", pdev);
++		if (ret) {
++			dev_err(&pdev->dev, "Failed to request IRQ %d\n", irq_numbers[i]);
++			return ret;
++		}
 +	}
 +
 +	return 0;
@@ -2144,7 +2144,10 @@ index 000000000..78fff2ef0
 + */
 +static int bao_virtio_intc_remove(struct platform_device *pdev)
 +{
-+	free_irq(irq_number, pdev);
++	for (int i = 0; i < irq_number; i++) {
++		// free the interrupt
++		free_irq(irq_numbers[i], pdev);
++	}
 +	return 0;
 +}
 +
@@ -2744,7 +2747,7 @@ index 000000000..d10f3192a
 \ No newline at end of file
 diff --git a/drivers/virt/bao/irqfd.c b/drivers/virt/bao/irqfd.c
 new file mode 100644
-index 000000000..6ad4c7b30
+index 000000000..2383b00bb
 --- /dev/null
 +++ b/drivers/virt/bao/irqfd.c
 @@ -0,0 +1,303 @@
@@ -2816,7 +2819,7 @@ index 000000000..6ad4c7b30
 +	struct bao_io_dm *dm = irqfd->dm;
 +
 +	// notify the Hypervisor about the event
-+	ret = bao_hypercall_virtio(dm->id, 0, 0, BAO_IO_NOTIFY, 0, 0, 0);
++	ret = bao_hypercall_virtio(dm->id, 0, BAO_IO_NOTIFY, 0, 0, 0);
 +
 +	if (ret.ret != 0) {
 +		return -EFAULT;
@@ -3054,10 +3057,10 @@ index 000000000..6ad4c7b30
 \ No newline at end of file
 diff --git a/include/uapi/linux/bao.h b/include/uapi/linux/bao.h
 new file mode 100644
-index 000000000..31179166f
+index 000000000..4f040e17d
 --- /dev/null
 +++ b/include/uapi/linux/bao.h
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,101 @@
 +/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 +/*
 + * Userspace interface for /dev/bao - Bao Hypervisor Service Module
@@ -3084,13 +3087,12 @@ index 000000000..31179166f
 +#define BAO_IO_NOTIFY 0x3
 +
 +#define BAO_NAME_MAX_LEN 32
-+#define BAO_IO_REQUEST_MAX 16
++#define BAO_IO_REQUEST_MAX 64
 +
 +/** 
 + * Contains the specific parameters of a Bao VirtIO request
 + * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
-+ * @reg_off: Gives the offset of the MMIO Register that was accessed
-+ * @addr: Gives the real address that was accessed
++ * @addr: Gives the MMIO register address that was accessed
 + * @op: Write, Read, Ask or Notify operation
 + * @value: Value to write or read
 + * @access_width: Access width (VirtIO MMIO only allows 4-byte wide and alligned accesses)
@@ -3100,14 +3102,13 @@ index 000000000..31179166f
 +*/
 +struct bao_virtio_request {
 +	__u64 virtio_id;
-+	__u64 reg_off;
 +	__u64 addr;
 +	__u64 op;
 +	__u64 value;
 +	__u64 access_width;
 +	__u64 cpu_id;
 +	__u64 vcpu_id;
-+	__u64 ret;
++	__s32 ret;
 +};
 +
 +/**
