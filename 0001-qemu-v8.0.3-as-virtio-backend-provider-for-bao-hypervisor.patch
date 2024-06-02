@@ -20,10 +20,10 @@ index 8bdedb7d1..3d9dc6fcf 100644
      select FSDEV_9P if VIRTFS
 diff --git a/accel/bao/bao-all.c b/accel/bao/bao-all.c
 new file mode 100644
-index 000000000..441d8eb5a
+index 000000000..9a1e9bf81
 --- /dev/null
 +++ b/accel/bao/bao-all.c
-@@ -0,0 +1,650 @@
+@@ -0,0 +1,635 @@
 +/*
 + * QEMU Hypervisor.framework (Bao) support
 + *
@@ -297,14 +297,6 @@ index 000000000..441d8eb5a
 +
 +    for (;;)
 +    {
-+        // attach the I/O client
-+        rc = s->dm.attach_io_client(&s->dm);
-+        if (rc < 0)
-+        {
-+            info_report("ERROR: Failed to attach I/O client.\n");
-+            return NULL;
-+        }
-+
 +        // fill the VirtIO request with zeros
 +        s->dm.req.virtio_id = 0x0;
 +        s->dm.req.addr = 0x0;
@@ -315,19 +307,23 @@ index 000000000..441d8eb5a
 +        s->dm.req.vcpu_id = 0x0;
 +        s->dm.req.ret = 0x0;
 +
-+        // request the VirtIO request
-+        if (s->dm.request_io(&s->dm, &s->dm.req) == 0)
++        // attach the I/O client
++        rc = s->dm.attach_io_client(&s->dm, &s->dm.req);
++        if (rc < 0)
 +        {
-+            // handle the request
-+            handle_ioreq(s);
++            info_report("ERROR: Failed to attach I/O client.\n");
++            return NULL;
++        }
 +
-+            // notify the VirtIO frontend DM
-+            rc = s->dm.notify_io_completed(&s->dm, &s->dm.req);
-+            if (rc < 0)
-+            {
-+                info_report("ERROR: Failed to notify VirtIO frontend DM\n");
-+                return NULL;
-+            }
++        // handle the request
++        handle_ioreq(s);
++
++        // notify the VirtIO frontend DM
++        rc = s->dm.notify_io_completed(&s->dm, &s->dm.req);
++        if (rc < 0)
++        {
++            info_report("ERROR: Failed to notify VirtIO frontend DM\n");
++            return NULL;
 +        }
 +    }
 +
@@ -563,7 +559,6 @@ index 000000000..441d8eb5a
 +static int bao_init(MachineState *ms)
 +{
 +    BaoState *s = BAO_STATE(ms->accelerator);
-+    int rc = 0;
 +    uint64_t shmem_addr = 0;
 +    uint64_t shmem_size = 0;
 +
@@ -606,16 +601,6 @@ index 000000000..441d8eb5a
 +        // create a VirtIO backend DM with DM ID (or virtio_id) equal to 0
 +        info_report("QEMU - CREATING DM %ld VIRTIO BACKEND\n", cmd_params[i].dm_id);
 +        s->dm[i].dm = create_virtio_backend_vm(cmd_params[i]);
-+
-+        // create an I/O client associated with the VirtIO backend DM
-+        info_report("QEMU - CREATE IO CLIENT\n");
-+        rc = s->dm[i].dm.create_io_client(&s->dm[i].dm);
-+        if (rc < 0)
-+        {
-+            printf("ERROR: Failed to create I/O client.\n");
-+            s->dm[i].dm.destroy(&s->dm[i].dm);
-+            return -1;
-+        }
 +
 +        global_vm_fd[i] = s->dm[i].dm.dm_fd;
 +
@@ -677,10 +662,10 @@ index 000000000..441d8eb5a
 \ No newline at end of file
 diff --git a/accel/bao/ioreq-api.h b/accel/bao/ioreq-api.h
 new file mode 100644
-index 000000000..6f2424dd6
+index 000000000..934eaf8b4
 --- /dev/null
 +++ b/accel/bao/ioreq-api.h
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,193 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao VirtIO Backend DM I/O Request API
@@ -746,17 +731,14 @@ index 000000000..6f2424dd6
 +#define BAO_IOCTL_IO_DM_BACKEND_CREATE _IOW(BAO_IOCTL_TYPE, 0x01, uint32_t)
 +#define BAO_IOCTL_IO_DM_BACKEND_DESTROY _IOW(BAO_IOCTL_TYPE, 0x02, uint32_t)
 +
-+#define BAO_IOCTL_IO_CLIENT_CREATE _IO(BAO_IOCTL_TYPE, 0x03)
-+#define BAO_IOCTL_IO_CLIENT_DESTROY _IO(BAO_IOCTL_TYPE, 0x04)
-+#define BAO_IOCTL_IO_CLIENT_ATTACH _IO(BAO_IOCTL_TYPE, 0x05)
++#define BAO_IOCTL_IO_CLIENT_ATTACH _IOWR(BAO_IOCTL_TYPE, 0x03, struct bao_virtio_request)
 +
-+#define BAO_IOCTL_IO_REQUEST _IOWR(BAO_IOCTL_TYPE, 0x06, struct bao_virtio_request)
 +#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED \
-+	_IOW(BAO_IOCTL_TYPE, 0x07, struct bao_virtio_request)
-+#define BAO_IOCTL_IO_NOTIFY_GUEST _IO(BAO_IOCTL_TYPE, 0x08)
++	_IOW(BAO_IOCTL_TYPE, 0x04, struct bao_virtio_request)
++#define BAO_IOCTL_IO_NOTIFY_GUEST _IO(BAO_IOCTL_TYPE, 0x05)
 +
-+#define BAO_IOCTL_IOEVENTFD _IOW(BAO_IOCTL_TYPE, 0x09, struct bao_ioeventfd)
-+#define BAO_IOCTL_IRQFD _IOW(BAO_IOCTL_TYPE, 0x0A, struct bao_irqfd)
++#define BAO_IOCTL_IOEVENTFD _IOW(BAO_IOCTL_TYPE, 0x06, struct bao_ioeventfd)
++#define BAO_IOCTL_IRQFD _IOW(BAO_IOCTL_TYPE, 0x07, struct bao_irqfd)
 +
 +#define BAO_IOEVENTFD_FLAG_ASSIGN 0x00
 +#define BAO_IOEVENTFD_FLAG_DATAMATCH (1 << 1)
@@ -782,7 +764,6 @@ index 000000000..6f2424dd6
 + * @create_io_client: Create a IO Client for the DM
 + * @destroy_io_client: Destroy the IO Client
 + * @attach_io_client: Attach the IO Client
-+ * @request_io: Request a IO request
 + * @notify_io_completed: Notify the completion of an IO request
 + * @configure_ioeventfd: Configure an ioeventfd
 + * @configure_irqfd: Configure an irqfd
@@ -797,10 +778,7 @@ index 000000000..6f2424dd6
 +    struct bao_virtio_request req;
 +    int (*create)(struct bao_frontend_dm *self);
 +    int (*destroy)(struct bao_frontend_dm *self);
-+    int (*create_io_client)(struct bao_frontend_dm *self);
-+    int (*destroy_io_client)(struct bao_frontend_dm *self);
-+    int (*attach_io_client)(struct bao_frontend_dm *self);
-+    int (*request_io)(struct bao_frontend_dm *self, struct bao_virtio_request *req);
++    int (*attach_io_client)(struct bao_frontend_dm *self, struct bao_virtio_request *req);
 +    int (*notify_io_completed)(struct bao_frontend_dm *self, struct bao_virtio_request *req);
 +    int (*notify_guest)(struct bao_frontend_dm *self);
 +    int (*configure_ioeventfd)(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd);
@@ -809,10 +787,7 @@ index 000000000..6f2424dd6
 +
 +int bao_io_dm_create(struct bao_frontend_dm *self);
 +int bao_io_dm_destroy(struct bao_frontend_dm *self);
-+int bao_create_io_client(struct bao_frontend_dm *self);
-+int bao_destroy_io_client(struct bao_frontend_dm *self);
-+int bao_attach_io_client(struct bao_frontend_dm *self);
-+int bao_request_io(struct bao_frontend_dm *self, struct bao_virtio_request *req);
++int bao_attach_io_client(struct bao_frontend_dm *self, struct bao_virtio_request *req);
 +int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req);
 +int bao_notify_guest(struct bao_frontend_dm *self);
 +int bao_create_ioeventfd(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd);
@@ -838,24 +813,9 @@ index 000000000..6f2424dd6
 +    return rc;
 +}
 +
-+int bao_create_io_client(struct bao_frontend_dm *self)
++int bao_attach_io_client(struct bao_frontend_dm *self, struct bao_virtio_request *req)
 +{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IO_CLIENT_CREATE);
-+}
-+
-+int bao_destroy_io_client(struct bao_frontend_dm *self)
-+{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IO_CLIENT_DESTROY);
-+}
-+
-+int bao_attach_io_client(struct bao_frontend_dm *self)
-+{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IO_CLIENT_ATTACH);
-+}
-+
-+int bao_request_io(struct bao_frontend_dm *self, struct bao_virtio_request *req)
-+{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IO_REQUEST, req);
++    return ioctl(self->dm_fd, BAO_IOCTL_IO_CLIENT_ATTACH, req);
 +}
 +
 +int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req)
@@ -889,10 +849,7 @@ index 000000000..6f2424dd6
 +    vm.shmem_size = params.shmem_size;
 +    vm.create = bao_io_dm_create;
 +    vm.destroy = bao_io_dm_destroy;
-+    vm.create_io_client = bao_create_io_client;
-+    vm.destroy_io_client = bao_destroy_io_client;
 +    vm.attach_io_client = bao_attach_io_client;
-+    vm.request_io = bao_request_io;
 +    vm.notify_io_completed = bao_notify_io_completed;
 +    vm.notify_guest = bao_notify_guest;
 +    vm.configure_ioeventfd = bao_create_ioeventfd;
