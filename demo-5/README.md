@@ -27,15 +27,15 @@ When you first install a toolchain, rustup installs only the standard library fo
 rustup target add aarch64-unknown-linux-gnu
 ```
 
-Download the [Bao VirtIO device model](https://github.com/joaopeixoto13/bao-virtio)
+Download the [Bao VirtIO device model](https://github.com/joaopeixoto13/bao-virtio-dm)
 ```
-mkdir /path/to/your/bao-virtio
-git clone git@github.com:joaopeixoto13/bao-virtio.git /path/to/your/bao-virtio
+mkdir /path/to/your/bao-virtio-dm
+git clone git@github.com:joaopeixoto13/bao-virtio-dm.git /path/to/your/bao-virtio-dm
 ```
 
 Build the Bao VirtIO Device Model:
 ```
-cd /path/to/your/bao-virtio
+cd /path/to/your/bao-virtio-dm
 cargo build --target=aarch64-unknown-linux-gnu --release
 ```
 
@@ -113,7 +113,7 @@ fatload mmc 0 0x200000 bao.bin; go 0x200000
 Launch the **device model** with vhost vsock frontend device:
 
 ```
-nohup bao-virtio --config /PATH/TO/YOUR/config-virtio-vsock.yaml > /etc/bao-virtio.log 2>&1 &
+nohup bao-virtio-dm --config /PATH/TO/YOUR/config-virtio-vsock.yaml > /etc/bao-virtio-dm.log 2>&1 &
 ```
 
 ## 7. Validate the communication

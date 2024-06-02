@@ -32,15 +32,15 @@ When you first install a toolchain, rustup installs only the standard library fo
 rustup target add aarch64-unknown-linux-gnu
 ```
 
-Download the [Bao VirtIO device model](https://github.com/joaopeixoto13/bao-virtio):
+Download the [Bao VirtIO device model](https://github.com/joaopeixoto13/bao-virtio-dm):
 ```
-mkdir /path/to/your/bao-virtio
-git clone git@github.com:joaopeixoto13/bao-virtio.git /path/to/your/bao-virtio
+mkdir /path/to/your/bao-virtio-dm
+git clone git@github.com:joaopeixoto13/bao-virtio-dm.git /path/to/your/bao-virtio-dm
 ```
 
 Build the Bao VirtIO Device Model:
 ```
-cd /path/to/your/bao-virtio
+cd /path/to/your/bao-virtio-dm
 cargo build --target=aarch64-unknown-linux-gnu --release
 ```
 

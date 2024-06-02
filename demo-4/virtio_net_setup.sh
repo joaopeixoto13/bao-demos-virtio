@@ -26,8 +26,8 @@ ifconfig tap0 192.168.42.14 up
 ifconfig tap1 192.168.42.15 up
 
 # Launch 2 Bao VirtIO Device Models to serve the two Frontend's
-nohup bao-virtio --config ~/config-virtio-vm1.yaml > ~/bao-virtio.log 2>&1 &
-nohup bao-virtio --config ~/config-virtio-vm2.yaml > ~/bao-virtio.log 2>&1 &
+nohup bao-virtio-dm --config ~/config-virtio-vm1.yaml > ~/bao-virtio-dm.log 2>&1 &
+nohup bao-virtio-dm --config ~/config-virtio-vm2.yaml > ~/bao-virtio-dm.log 2>&1 &
 
 # Launch only 1 Bao VirtIO Device Model to serve the two Frontend's
-#nohup bao-virtio --config ~/config-virtio-vms.yaml > ~/bao-virtio.log 2>&1 &
+#nohup bao-virtio-dm --config ~/config-virtio-vms.yaml > ~/bao-virtio.log 2>&1 &
