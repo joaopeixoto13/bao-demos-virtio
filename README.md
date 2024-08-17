@@ -34,7 +34,7 @@ There are availble two buildroot defconfig files:
 
 Before applying the defoconfig changes, edit the `BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE` entry to include your [Linux configuration](linux-v6.5-backend.config) config file path. 
 
-If you want to manually configure your Linux, you must enable the option **BAO_VIRTIO**. To enable this feature, type `make linux-menuconfig` and navigating to: `Device Drivers > Virtualization Drivers > Bao Hypervisor Module for VirtIO`.
+If you want to manually configure your Linux, you must enable the option **BAO_IO_DISPATCHER**. To enable this feature, type `make linux-menuconfig` and navigating to: `Device Drivers > Virtualization Drivers > Bao Hypervisor I/O Dispatcher`.
 
 Apply the buildroot defconfig changes:
 ```
@@ -56,10 +56,10 @@ Override the Linux source directory:
 export LINUX_OVERRIDE_SRCDIR=/path/to/your/linux
 ```
 
-To integrate the I/O Request Management System into Linux, apply the designated [patch](0001-linux-v6.5-backend-dispatcher-io.patch):
+To integrate the I/O Request Management System into Linux, apply the designated [patch](0001-linux-v6.5-backend-io-dispatcher.patch):
 
 ```
-git apply 0001-linux-v6.5-backend-dispatcher-io.patch
+git apply 0001-linux-v6.5-backend-io-dispatcher.patch
 ```
 
 ---

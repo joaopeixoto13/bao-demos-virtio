@@ -1,38 +1,29 @@
 diff --git a/accel/Kconfig b/accel/Kconfig
-index 8bdedb7d1..3d9dc6fcf 100644
+index 8bdedb7d1..bcd88144d 100644
 --- a/accel/Kconfig
 +++ b/accel/Kconfig
-@@ -16,6 +16,15 @@ config TCG
- config KVM
-     bool
- 
-+config BAO
-+    bool
-+
-+config BAO_EVENTFD
-+    bool
-+
-+config BAO_IRQFD
-+    bool
-+
+@@ -19,3 +19,6 @@ config KVM
  config XEN
      bool
      select FSDEV_9P if VIRTFS
++
++config BAO
++    bool
+\ No newline at end of file
 diff --git a/accel/bao/bao-all.c b/accel/bao/bao-all.c
 new file mode 100644
-index 000000000..9a1e9bf81
+index 000000000..3f740a87d
 --- /dev/null
 +++ b/accel/bao/bao-all.c
-@@ -0,0 +1,635 @@
+@@ -0,0 +1,625 @@
++// SPDX-License-Identifier: GPL-2.0
 +/*
-+ * QEMU Hypervisor.framework (Bao) support
++ * Bao Source File
 + *
 + * Copyright (c) Bao Project and Contributors. All rights reserved.
-+ *
-+ * SPDX-License-Identifier: GPL-2.0
-+ *
-+ * Authors:
-+ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ *  
++ * Author:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
 + */
 +
 +#include "qemu/osdep.h"
@@ -55,7 +46,7 @@ index 000000000..9a1e9bf81
 +#include "hw/arm/virt-bao.h"
 +#include <stdarg.h>
 +#include <sys/ioctl.h>
-+#include "ioreq-api.h"
++#include "bao.h"
 +#include "qemu/event_notifier.h"
 +
 +#define IRQ_OFFSET (0x2f - BAO_IO_REQUEST_MAX + 1)
@@ -118,15 +109,6 @@ index 000000000..9a1e9bf81
 +}
 +
 +static int global_vm_fd[BAO_IO_REQUEST_MAX] = {0};
-+
-+int bao_set_irqfd(int fd)
-+{
-+    struct bao_irqfd irqfd = {
-+        .fd = fd,
-+        .flags = BAO_IRQFD_FLAG_ASSIGN,
-+    };
-+    return ioctl(global_vm_fd[0], BAO_IOCTL_IRQFD, &irqfd);
-+}
 +
 +/**
 + * @brief Get the IRQ flag
@@ -251,7 +233,7 @@ index 000000000..9a1e9bf81
 + * 
 + * @param s specifies the BaoDM
 + */
-+static inline void handle_ioreq(BaoDM *s)
++static inline void handle_io_req(BaoDM *s)
 +{
 +    MemTxResult ret = MEMTX_OK;
 +
@@ -316,7 +298,7 @@ index 000000000..9a1e9bf81
 +        }
 +
 +        // handle the request
-+        handle_ioreq(s);
++        handle_io_req(s);
 +
 +        // notify the VirtIO frontend DM
 +        rc = s->dm.notify_io_completed(&s->dm, &s->dm.req);
@@ -659,206 +641,6 @@ index 000000000..9a1e9bf81
 +    type_register_static(&bao_accel_ops_type);
 +}
 +type_init(bao_type_init);
-\ No newline at end of file
-diff --git a/accel/bao/ioreq-api.h b/accel/bao/ioreq-api.h
-new file mode 100644
-index 000000000..934eaf8b4
---- /dev/null
-+++ b/accel/bao/ioreq-api.h
-@@ -0,0 +1,193 @@
-+// SPDX-License-Identifier: GPL-2.0
-+/*
-+ * Bao VirtIO Backend DM I/O Request API
-+ *
-+ * Copyright (c) Bao Project and Contributors. All rights reserved.
-+ *  
-+ * Author:
-+ *	João Peixoto <joaopeixotooficial@gmail.com>
-+ */
-+
-+#ifndef __BAO_IOREQ_API_H
-+#define __BAO_IOREQ_API_H
-+
-+#include <stdio.h>
-+#include <stdint.h>
-+#include <fcntl.h>
-+#include <sys/ioctl.h>
-+#include <unistd.h>
-+
-+#define BAO_IO_WRITE 0x0
-+#define BAO_IO_READ 0x1
-+#define BAO_IO_ASK 0x2
-+#define BAO_IO_NOTIFY 0x3
-+
-+#define BAO_NAME_LEN 16
-+#define BAO_IO_REQUEST_MAX 16
-+
-+struct bao_virtio_request {
-+	uint64_t virtio_id;
-+	uint64_t addr;
-+	uint64_t op;
-+	uint64_t value;
-+	uint64_t access_width;
-+    uint64_t cpu_id;
-+    uint64_t vcpu_id;
-+	int32_t ret;
-+};
-+
-+struct bao_ioeventfd {
-+	uint32_t fd;
-+	uint32_t flags;
-+	uint64_t addr;
-+	uint32_t len;
-+	uint32_t reserved;
-+	uint64_t data;
-+};
-+
-+struct bao_irqfd {
-+	int32_t fd;
-+	uint32_t flags;
-+};
-+
-+struct cmd_params
-+{
-+    int64_t dm_id;
-+    int64_t irq;
-+    int64_t shmem_addr;
-+    int64_t shmem_size;
-+};
-+
-+#define BAO_IOCTL_TYPE 0xA6
-+
-+#define BAO_IOCTL_IO_DM_BACKEND_CREATE _IOW(BAO_IOCTL_TYPE, 0x01, uint32_t)
-+#define BAO_IOCTL_IO_DM_BACKEND_DESTROY _IOW(BAO_IOCTL_TYPE, 0x02, uint32_t)
-+
-+#define BAO_IOCTL_IO_CLIENT_ATTACH _IOWR(BAO_IOCTL_TYPE, 0x03, struct bao_virtio_request)
-+
-+#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED \
-+	_IOW(BAO_IOCTL_TYPE, 0x04, struct bao_virtio_request)
-+#define BAO_IOCTL_IO_NOTIFY_GUEST _IO(BAO_IOCTL_TYPE, 0x05)
-+
-+#define BAO_IOCTL_IOEVENTFD _IOW(BAO_IOCTL_TYPE, 0x06, struct bao_ioeventfd)
-+#define BAO_IOCTL_IRQFD _IOW(BAO_IOCTL_TYPE, 0x07, struct bao_irqfd)
-+
-+#define BAO_IOEVENTFD_FLAG_ASSIGN 0x00
-+#define BAO_IOEVENTFD_FLAG_DATAMATCH (1 << 1)
-+#define BAO_IOEVENTFD_FLAG_DEASSIGN (1 << 2)
-+
-+#define BAO_IRQFD_FLAG_ASSIGN 0x00
-+#define BAO_IRQFD_FLAG_DEASSIGN	0x01
-+
-+/**
-+ * @brief bao frontend dm structure
-+ * 
-+ * @note: Variables
-+ * @fd: Bao file descriptor
-+ * @dm_fd: DM file descriptor
-+ * @dm_id: DM ID (or VirtIO ID)
-+ * @shmem_addr: RAM address
-+ * @shmem_size: RAM size
-+ * @req: VirtIO request
-+ * 
-+ * @note: Methods
-+ * @create: Create the VirtIO Backend DM method (thgis method is called automatically when the DM object is created)
-+ * @destroy: Destroy the VirtIO Backend DM
-+ * @create_io_client: Create a IO Client for the DM
-+ * @destroy_io_client: Destroy the IO Client
-+ * @attach_io_client: Attach the IO Client
-+ * @notify_io_completed: Notify the completion of an IO request
-+ * @configure_ioeventfd: Configure an ioeventfd
-+ * @configure_irqfd: Configure an irqfd
-+ */
-+struct bao_frontend_dm {
-+    int fd;
-+    int dm_fd;
-+    uint64_t dm_id;
-+    int irq;
-+    uint64_t shmem_addr;
-+    uint64_t shmem_size;
-+    struct bao_virtio_request req;
-+    int (*create)(struct bao_frontend_dm *self);
-+    int (*destroy)(struct bao_frontend_dm *self);
-+    int (*attach_io_client)(struct bao_frontend_dm *self, struct bao_virtio_request *req);
-+    int (*notify_io_completed)(struct bao_frontend_dm *self, struct bao_virtio_request *req);
-+    int (*notify_guest)(struct bao_frontend_dm *self);
-+    int (*configure_ioeventfd)(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd);
-+    int (*configure_irqfd)(struct bao_frontend_dm *self, struct bao_irqfd *irqfd);
-+};
-+
-+int bao_io_dm_create(struct bao_frontend_dm *self);
-+int bao_io_dm_destroy(struct bao_frontend_dm *self);
-+int bao_attach_io_client(struct bao_frontend_dm *self, struct bao_virtio_request *req);
-+int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req);
-+int bao_notify_guest(struct bao_frontend_dm *self);
-+int bao_create_ioeventfd(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd);
-+int bao_create_irqfd(struct bao_frontend_dm *self, struct bao_irqfd *irqfd);
-+struct bao_frontend_dm create_virtio_backend_vm(struct cmd_params params);
-+
-+int bao_io_dm_create(struct bao_frontend_dm *self)
-+{
-+    if (self->fd < 0)
-+    {
-+        printf("ERROR: Failed to open Bao device driver.\n");
-+        return -1;
-+    }
-+    self->dm_fd = ioctl(self->fd, BAO_IOCTL_IO_DM_BACKEND_CREATE, &self->dm_id);
-+    return self->dm_fd;
-+}
-+
-+int bao_io_dm_destroy(struct bao_frontend_dm *self)
-+{
-+    int rc = ioctl(self->fd, BAO_IOCTL_IO_DM_BACKEND_DESTROY, &self->dm_id);
-+    self->dm_fd = -1;
-+    close(self->fd);
-+    return rc;
-+}
-+
-+int bao_attach_io_client(struct bao_frontend_dm *self, struct bao_virtio_request *req)
-+{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IO_CLIENT_ATTACH, req);
-+}
-+
-+int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req)
-+{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED, req);
-+}
-+
-+int bao_notify_guest(struct bao_frontend_dm *self)
-+{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IO_NOTIFY_GUEST);
-+}
-+
-+int bao_create_ioeventfd(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd)
-+{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IOEVENTFD, ioeventfd);
-+}
-+
-+int bao_create_irqfd(struct bao_frontend_dm *self, struct bao_irqfd *irqfd)
-+{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IRQFD, irqfd);
-+}
-+
-+struct bao_frontend_dm create_virtio_backend_vm(struct cmd_params params)
-+{
-+    struct bao_frontend_dm vm;
-+    vm.fd = open("/dev/bao", O_RDWR);
-+    vm.dm_id = params.dm_id;
-+    vm.dm_fd = -1;
-+    vm.irq = params.irq;
-+    vm.shmem_addr = params.shmem_addr;
-+    vm.shmem_size = params.shmem_size;
-+    vm.create = bao_io_dm_create;
-+    vm.destroy = bao_io_dm_destroy;
-+    vm.attach_io_client = bao_attach_io_client;
-+    vm.notify_io_completed = bao_notify_io_completed;
-+    vm.notify_guest = bao_notify_guest;
-+    vm.configure_ioeventfd = bao_create_ioeventfd;
-+    vm.configure_irqfd = bao_create_irqfd;
-+    vm.create(&vm);
-+    return vm;
-+}
-+
-+#endif // __BAO_IOREQ_API_H
 \ No newline at end of file
 diff --git a/accel/bao/meson.build b/accel/bao/meson.build
 new file mode 100644
@@ -1242,34 +1024,8 @@ index 8be459b41..23c6a13b6 100644
  specific_ss.add(when: 'CONFIG_ARM_V7M', if_true: files('armv7m_nvic.c'))
  specific_ss.add(when: 'CONFIG_GRLIB', if_true: files('grlib_irqmp.c'))
  specific_ss.add(when: 'CONFIG_IOAPIC', if_true: files('ioapic.c'))
-diff --git a/hw/virtio/vhost.c b/hw/virtio/vhost.c
-index 69a7b5592..b435132f7 100644
---- a/hw/virtio/vhost.c
-+++ b/hw/virtio/vhost.c
-@@ -28,6 +28,7 @@
- #include "migration/qemu-file-types.h"
- #include "sysemu/dma.h"
- #include "trace.h"
-+#include "sysemu/bao.h"
- 
- /* enabled until disconnected backend stabilizes */
- #define _VHOST_DEBUG 1
-@@ -1201,6 +1202,13 @@ int vhost_virtqueue_start(struct vhost_dev *dev,
-     }
- 
-     file.fd = event_notifier_get_fd(virtio_queue_get_host_notifier(vvq));
-+
-+    if (bao_enabled()) {
-+        if (bao_set_irqfd(file.fd) < 0) {
-+            info_report("bao_set_irqfd failed");
-+        }
-+    }
-+
-     r = dev->vhost_ops->vhost_set_vring_kick(dev, &file);
-     if (r) {
-         VHOST_OPS_DEBUG(r, "vhost_set_vring_kick failed");
 diff --git a/hw/virtio/virtio-mmio.c b/hw/virtio/virtio-mmio.c
-index 23ba625eb..0870f0063 100644
+index 23ba625eb..23b8da5e6 100644
 --- a/hw/virtio/virtio-mmio.c
 +++ b/hw/virtio/virtio-mmio.c
 @@ -29,6 +29,7 @@
@@ -1280,11 +1036,10 @@ index 23ba625eb..0870f0063 100644
  #include "sysemu/replay.h"
  #include "hw/virtio/virtio-mmio.h"
  #include "qemu/error-report.h"
-@@ -764,6 +765,11 @@ static void virtio_mmio_realizefn(DeviceState *d, Error **errp)
+@@ -764,6 +765,10 @@ static void virtio_mmio_realizefn(DeviceState *d, Error **errp)
          proxy->flags &= ~VIRTIO_IOMMIO_FLAG_USE_IOEVENTFD;
      }
  
-+    /* use ioeventfds to boost overall performance */
 +    if (bao_eventfds_enabled()) {
 +        proxy->flags |= VIRTIO_IOMMIO_FLAG_USE_IOEVENTFD;
 +    }
@@ -1391,10 +1146,10 @@ index 000000000..1bebb77b7
 \ No newline at end of file
 diff --git a/include/sysemu/bao.h b/include/sysemu/bao.h
 new file mode 100644
-index 000000000..bf05ec67a
+index 000000000..c49233af7
 --- /dev/null
 +++ b/include/sysemu/bao.h
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,52 @@
 +/*
 + * QEMU Bao support
 + *
@@ -1421,31 +1176,8 @@ index 000000000..bf05ec67a
 +
 +extern bool bao_allowed;
 +
-+/**
-+ * bao_enabled:
-+ *
-+ * Returns: true if we can use Bao CPUs (ie the kernel supports
-+ * Bao and we are running with a configuration where it is
-+ * meaningful to use it).
-+ */
 +#define bao_enabled() (bao_allowed)
-+
-+/**
-+ * bao_eventfds_enabled:
-+ *
-+ * Returns: true if we can use eventfds to receive notifications
-+ * from a Bao CPU (ie the kernel supports eventds and we are running
-+ * with a configuration where it is meaningful to use them).
-+ */
 +#define bao_eventfds_enabled() (true)
-+
-+/**
-+ * bao_irqfds_enabled:
-+ *
-+ * Returns: true if we can use irqfds to inject interrupts into
-+ * a Bao CPU (ie the kernel supports irqfds and we are running
-+ * with a configuration where it is meaningful to use them).
-+ */
 +#define bao_irqfds_enabled() (true)
 +
 +/**
@@ -1460,8 +1192,6 @@ index 000000000..bf05ec67a
 + *
 + */
 +void bao_set_irq(int irq, bool value);
-+
-+int bao_set_irqfd(int fd);
 +
 +#else /* !CONFIG_BAO_IS_POSSIBLE */
 +
