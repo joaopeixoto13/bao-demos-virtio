@@ -642,6 +642,198 @@ index 000000000..3f740a87d
 +}
 +type_init(bao_type_init);
 \ No newline at end of file
+diff --git a/accel/bao/bao.h b/accel/bao/bao.h
+new file mode 100644
+index 000000000..22843aef3
+--- /dev/null
++++ b/accel/bao/bao.h
+@@ -0,0 +1,185 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Header File
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Author:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef __BAO_H
++#define __BAO_H
++
++#include <stdio.h>
++#include <stdint.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include <unistd.h>
++
++#define BAO_IO_WRITE 0x0
++#define BAO_IO_READ 0x1
++#define BAO_IO_ASK 0x2
++#define BAO_IO_NOTIFY 0x3
++
++#define BAO_NAME_LEN 16
++#define BAO_IO_REQUEST_MAX 16
++
++struct bao_virtio_request {
++	uint64_t virtio_id;
++	uint64_t addr;
++	uint64_t op;
++	uint64_t value;
++	uint64_t access_width;
++    uint64_t cpu_id;
++    uint64_t vcpu_id;
++	int32_t ret;
++};
++
++struct bao_ioeventfd {
++	uint32_t fd;
++	uint32_t flags;
++	uint64_t addr;
++	uint32_t len;
++	uint32_t reserved;
++	uint64_t data;
++};
++
++struct bao_irqfd {
++	int32_t fd;
++	uint32_t flags;
++};
++
++struct cmd_params
++{
++    int64_t dm_id;
++    int64_t irq;
++    int64_t shmem_addr;
++    int64_t shmem_size;
++};
++
++#define BAO_IOCTL_TYPE 0xA6
++
++#define BAO_IOCTL_IO_DM_BACKEND_CREATE _IOW(BAO_IOCTL_TYPE, 0x01, uint32_t)
++#define BAO_IOCTL_IO_DM_BACKEND_DESTROY _IOW(BAO_IOCTL_TYPE, 0x02, uint32_t)
++
++#define BAO_IOCTL_IO_CLIENT_ATTACH _IOWR(BAO_IOCTL_TYPE, 0x03, struct bao_virtio_request)
++
++#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED \
++	_IOW(BAO_IOCTL_TYPE, 0x04, struct bao_virtio_request)
++
++#define BAO_IOCTL_IOEVENTFD _IOW(BAO_IOCTL_TYPE, 0x05, struct bao_ioeventfd)
++#define BAO_IOCTL_IRQFD _IOW(BAO_IOCTL_TYPE, 0x06, struct bao_irqfd)
++
++#define BAO_IOEVENTFD_FLAG_ASSIGN 0x00
++#define BAO_IOEVENTFD_FLAG_DATAMATCH (1 << 1)
++#define BAO_IOEVENTFD_FLAG_DEASSIGN (1 << 2)
++
++#define BAO_IRQFD_FLAG_ASSIGN 0x00
++#define BAO_IRQFD_FLAG_DEASSIGN	0x01
++
++/**
++ * @brief bao frontend dm structure
++ * 
++ * @note: Variables
++ * @fd: Bao file descriptor
++ * @dm_fd: DM file descriptor
++ * @dm_id: DM ID (or VirtIO ID)
++ * @shmem_addr: RAM address
++ * @shmem_size: RAM size
++ * @req: VirtIO request
++ * 
++ * @note: Methods
++ * @create: Create the VirtIO Backend DM method (thgis method is called automatically when the DM object is created)
++ * @destroy: Destroy the VirtIO Backend DM
++ * @create_io_client: Create a IO Client for the DM
++ * @destroy_io_client: Destroy the IO Client
++ * @attach_io_client: Attach the IO Client
++ * @notify_io_completed: Notify the completion of an IO request
++ * @configure_ioeventfd: Configure an ioeventfd
++ * @configure_irqfd: Configure an irqfd
++ */
++struct bao_frontend_dm {
++    int fd;
++    int dm_fd;
++    uint64_t dm_id;
++    int irq;
++    uint64_t shmem_addr;
++    uint64_t shmem_size;
++    struct bao_virtio_request req;
++    int (*create)(struct bao_frontend_dm *self);
++    int (*destroy)(struct bao_frontend_dm *self);
++    int (*attach_io_client)(struct bao_frontend_dm *self, struct bao_virtio_request *req);
++    int (*notify_io_completed)(struct bao_frontend_dm *self, struct bao_virtio_request *req);
++    int (*configure_ioeventfd)(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd);
++    int (*configure_irqfd)(struct bao_frontend_dm *self, struct bao_irqfd *irqfd);
++};
++
++int bao_io_dm_create(struct bao_frontend_dm *self);
++int bao_io_dm_destroy(struct bao_frontend_dm *self);
++int bao_attach_io_client(struct bao_frontend_dm *self, struct bao_virtio_request *req);
++int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req);
++int bao_notify_guest(struct bao_frontend_dm *self);
++int bao_create_ioeventfd(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd);
++int bao_create_irqfd(struct bao_frontend_dm *self, struct bao_irqfd *irqfd);
++struct bao_frontend_dm create_virtio_backend_vm(struct cmd_params params);
++
++int bao_io_dm_create(struct bao_frontend_dm *self)
++{
++    if (self->fd < 0)
++    {
++        printf("ERROR: Failed to open Bao device driver.\n");
++        return -1;
++    }
++    self->dm_fd = ioctl(self->fd, BAO_IOCTL_IO_DM_BACKEND_CREATE, &self->dm_id);
++    return self->dm_fd;
++}
++
++int bao_io_dm_destroy(struct bao_frontend_dm *self)
++{
++    int rc = ioctl(self->fd, BAO_IOCTL_IO_DM_BACKEND_DESTROY, &self->dm_id);
++    self->dm_fd = -1;
++    close(self->fd);
++    return rc;
++}
++
++int bao_attach_io_client(struct bao_frontend_dm *self, struct bao_virtio_request *req)
++{
++    return ioctl(self->dm_fd, BAO_IOCTL_IO_CLIENT_ATTACH, req);
++}
++
++int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req)
++{
++    return ioctl(self->dm_fd, BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED, req);
++}
++
++int bao_create_ioeventfd(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd)
++{
++    return ioctl(self->dm_fd, BAO_IOCTL_IOEVENTFD, ioeventfd);
++}
++
++int bao_create_irqfd(struct bao_frontend_dm *self, struct bao_irqfd *irqfd)
++{
++    return ioctl(self->dm_fd, BAO_IOCTL_IRQFD, irqfd);
++}
++
++struct bao_frontend_dm create_virtio_backend_vm(struct cmd_params params)
++{
++    struct bao_frontend_dm vm;
++    vm.fd = open("/dev/bao-io-dispatcher", O_RDWR);
++    vm.dm_id = params.dm_id;
++    vm.dm_fd = -1;
++    vm.irq = params.irq;
++    vm.shmem_addr = params.shmem_addr;
++    vm.shmem_size = params.shmem_size;
++    vm.create = bao_io_dm_create;
++    vm.destroy = bao_io_dm_destroy;
++    vm.attach_io_client = bao_attach_io_client;
++    vm.notify_io_completed = bao_notify_io_completed;
++    vm.configure_ioeventfd = bao_create_ioeventfd;
++    vm.configure_irqfd = bao_create_irqfd;
++    vm.create(&vm);
++    return vm;
++}
++
++#endif // __BAO_IOREQ_API_H
+\ No newline at end of file
 diff --git a/accel/bao/meson.build b/accel/bao/meson.build
 new file mode 100644
 index 000000000..d3aa36eb7
@@ -1529,15 +1721,3 @@ index 5182ed0c9..532812389 100644
          /*
           * We assume that no accelerator except TCG (and the "not really an
           * accelerator" qtest) can handle these features, because Arm hardware
-diff --git a/util/mmap-alloc.c b/util/mmap-alloc.c
-index 5ed7d2918..58416d54b 100644
---- a/util/mmap-alloc.c
-+++ b/util/mmap-alloc.c
-@@ -178,6 +178,7 @@ static void *mmap_activate(void *ptr, size_t size, int fd,
- 
-     activated_ptr = mmap(ptr, size, prot, flags | map_sync_flags, fd,
-                          map_offset);
-+
-     if (activated_ptr == MAP_FAILED && map_sync_flags) {
-         if (errno == ENOTSUP) {
-             char *proc_link = g_strdup_printf("/proc/self/fd/%d", fd);
