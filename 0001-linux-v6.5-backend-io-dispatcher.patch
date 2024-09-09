@@ -1,8 +1,8 @@
 diff --git a/Documentation/userspace-api/ioctl/ioctl-number.rst b/Documentation/userspace-api/ioctl/ioctl-number.rst
-index e91c0376e..3116fe1ce 100644
+index 4ea5b8373..a157b9e3b 100644
 --- a/Documentation/userspace-api/ioctl/ioctl-number.rst
 +++ b/Documentation/userspace-api/ioctl/ioctl-number.rst
-@@ -340,6 +340,7 @@ Code  Seq#    Include File                                           Comments
+@@ -334,6 +334,7 @@ Code  Seq#    Include File                                           Comments
                                                                       <mailto:luzmaximilian@gmail.com>
  0xA5  20-2F  linux/surface_aggregator/dtx.h                          Microsoft Surface DTX driver
                                                                       <mailto:luzmaximilian@gmail.com>
@@ -227,10 +227,10 @@ index 000000000..9d5c102fd
 +#endif /* __ASM_RISCV_BAO_H */
 \ No newline at end of file
 diff --git a/drivers/Kconfig b/drivers/Kconfig
-index 7bdad836f..f6906c8f7 100644
+index 514ae6b24..8ef51c756 100644
 --- a/drivers/Kconfig
 +++ b/drivers/Kconfig
-@@ -147,6 +147,8 @@ source "drivers/hv/Kconfig"
+@@ -149,6 +149,8 @@ source "drivers/hv/Kconfig"
  
  source "drivers/xen/Kconfig"
  
@@ -240,10 +240,10 @@ index 7bdad836f..f6906c8f7 100644
  
  source "drivers/comedi/Kconfig"
 diff --git a/drivers/Makefile b/drivers/Makefile
-index fe9ceb0d2..986b0db67 100644
+index 7241d80a7..9fd8193d8 100644
 --- a/drivers/Makefile
 +++ b/drivers/Makefile
-@@ -160,6 +160,7 @@ obj-$(CONFIG_SOUNDWIRE)		+= soundwire/
+@@ -165,6 +165,7 @@ obj-$(CONFIG_SOUNDWIRE)		+= soundwire/
  obj-$(CONFIG_VIRT_DRIVERS)	+= virt/
  obj-$(subst m,y,$(CONFIG_HYPERV))	+= hv/
  
@@ -613,10 +613,10 @@ index 000000000..59e5c0817
 +MODULE_DESCRIPTION("bao ipc through shared-memory sample driver");
 \ No newline at end of file
 diff --git a/drivers/virt/Kconfig b/drivers/virt/Kconfig
-index d8c848cf0..33f9f4243 100644
+index f79ab13a5..e10e76e6e 100644
 --- a/drivers/virt/Kconfig
 +++ b/drivers/virt/Kconfig
-@@ -41,6 +41,8 @@ config FSL_HV_MANAGER
+@@ -42,6 +42,8 @@ config FSL_HV_MANAGER
            4) A kernel interface for receiving callbacks when a managed
  	     partition shuts down.
  
@@ -626,7 +626,7 @@ index d8c848cf0..33f9f4243 100644
  
  source "drivers/virt/nitro_enclaves/Kconfig"
 diff --git a/drivers/virt/Makefile b/drivers/virt/Makefile
-index f29901bd7..f6733a98e 100644
+index e9aa6fc96..97b8fae93 100644
 --- a/drivers/virt/Makefile
 +++ b/drivers/virt/Makefile
 @@ -3,6 +3,7 @@
@@ -637,6 +637,13 @@ index f29901bd7..f6733a98e 100644
  obj-$(CONFIG_FSL_HV_MANAGER)	+= fsl_hypervisor.o
  obj-$(CONFIG_VMGENID)		+= vmgenid.o
  obj-y				+= vboxguest/
+@@ -11,4 +12,4 @@ obj-$(CONFIG_NITRO_ENCLAVES)	+= nitro_enclaves/
+ obj-$(CONFIG_ACRN_HSM)		+= acrn/
+ obj-$(CONFIG_EFI_SECRET)	+= coco/efi_secret/
+ obj-$(CONFIG_SEV_GUEST)		+= coco/sev-guest/
+-obj-$(CONFIG_INTEL_TDX_GUEST)	+= coco/tdx-guest/
++obj-$(CONFIG_INTEL_TDX_GUEST)	+= coco/tdx-guest/
+\ No newline at end of file
 diff --git a/drivers/virt/bao/Kconfig b/drivers/virt/bao/Kconfig
 new file mode 100644
 index 000000000..c4facbd3a
@@ -704,7 +711,7 @@ index 000000000..8ee62d05f
 \ No newline at end of file
 diff --git a/drivers/virt/bao/bao_drv.h b/drivers/virt/bao/bao_drv.h
 new file mode 100644
-index 000000000..16ce28814
+index 000000000..a60dc0bd2
 --- /dev/null
 +++ b/drivers/virt/bao/bao_drv.h
 @@ -0,0 +1,297 @@
@@ -738,7 +745,7 @@ index 000000000..16ce28814
 +#define BAO_IO_DM_FLAG_DESTROYING 0U
 +#define BAO_IO_DM_FLAG_CLEARING_IOREQ 1U
 +
-+/**
++/** 
 + * Contains the specific parameters of a Bao I/O request
 + * @list: List node for this request
 + * @virtio_request: The I/O request
@@ -823,7 +830,7 @@ index 000000000..16ce28814
 + * @list: List node for this range
 + * @start: The start address of the range
 + * @end: The end address of the range
-+ *
++ * 
 + */
 +struct bao_io_range {
 +	struct list_head list;
@@ -872,7 +879,7 @@ index 000000000..16ce28814
 +
 +/**
 + * Destroy an I/O client
-+ * @client: The I/O client to be destroyed
++ * @client: The I/O client to be destroyed 
 + */
 +void bao_io_client_destroy(struct bao_io_client *client);
 +
@@ -1008,7 +1015,7 @@ index 000000000..16ce28814
 \ No newline at end of file
 diff --git a/drivers/virt/bao/dm.c b/drivers/virt/bao/dm.c
 new file mode 100644
-index 000000000..8b123cebb
+index 000000000..1ea066e93
 --- /dev/null
 +++ b/drivers/virt/bao/dm.c
 @@ -0,0 +1,217 @@
@@ -1063,15 +1070,15 @@ index 000000000..8b123cebb
 + * ioctl handler for DM mmap
 + * @filp: The file pointer of the DM
 + * @vma: Contains the information about the virtual address range that is used to access
-+ *
++ * 
 + * @note:
-+ * The device driver only has to build suitable page tables for the address range and,
++ * The device driver only has to build suitable page tables for the address range and, 
 + * if necessary, replace vma->vm_ops with a new set of operations.
 + */
 +static int bao_dm_mmap(struct file *filp, struct vm_area_struct *vma)
 +{
 +	/*
-+	* There are two ways of building the page tables:
++	* There are two ways of building the page tables: 
 +	* 1) Doing it all at once with a function called 'remap_pfn_range'
 +	* 2) Doing it a page at a time via the 'nopage' DMA method.
 +	* For this case, we will use the first method.
@@ -1412,10 +1419,10 @@ index 000000000..0759dacb1
 \ No newline at end of file
 diff --git a/drivers/virt/bao/io_dispatcher.c b/drivers/virt/bao/io_dispatcher.c
 new file mode 100644
-index 000000000..11fc7049e
+index 000000000..51f0507e2
 --- /dev/null
 +++ b/drivers/virt/bao/io_dispatcher.c
-@@ -0,0 +1,698 @@
+@@ -0,0 +1,704 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao Hypervisor I/O Dispatcher
@@ -1459,7 +1466,7 @@ index 000000000..11fc7049e
 +
 +/**
 + * Acquires the I/O requests from the Bao Hypervisor and dispatches them to the respective I/O client
-+ * @dm: The DM that the I/O request belongs to
++ * @dm: The DM that the I/O request belongs to 
 + */
 +static int dispatch_io(struct bao_io_dm *dm);
 +
@@ -1469,7 +1476,7 @@ index 000000000..11fc7049e
 +static void io_dispatcher_pause(void);
 +
 +/**
-+ * Resume the I/O Dispatcher
++ * Resume the I/O Dispatcher 
 + */
 +static void io_dispatcher_resume(void);
 +
@@ -1524,8 +1531,10 @@ index 000000000..11fc7049e
 +	// stop the client
 +	if (client->is_control)
 +		wake_up_interruptible(&client->wq);
-+	else
++	else {
++		bao_ioeventfd_client_destroy(dm);
 +		kthread_stop(client->thread);
++	}
 +
 +	// remove the I/O ranges
 +	write_lock_bh(&client->range_lock);
@@ -1565,7 +1574,7 @@ index 000000000..11fc7049e
 +{
 +	if (client->is_control) {
 +		/*
-+		 * In the Control client, a user space thread waits on the waitqueue.
++		 * In the Control client, a user space thread waits on the waitqueue. 
 +		 * The thread should wait until:
 +		 * - there are pending I/O requests to be processed
 +		 * - the I/O client is going to be destroyed
@@ -1577,7 +1586,7 @@ index 000000000..11fc7049e
 +			return -EPERM;
 +	} else {
 +		/*
-+		 * In the non-control client (e.g., Ioeventfd Client), a kernel space thread waits on the waitqueue.
++		 * In the non-control client (e.g., Ioeventfd Client), a kernel space thread waits on the waitqueue. 
 +		 * The thread should wait until:
 +		 * - there are pending I/O requests to be processed
 +		 * - the I/O client is going to be destroyed
@@ -1587,8 +1596,12 @@ index 000000000..11fc7049e
 +					 has_pending_requests(client) ||
 +						 is_destroying(client) ||
 +							 kthread_should_stop());
-+		if (is_destroying(client) || kthread_should_stop())
++		if (is_destroying(client) || kthread_should_stop()) {
++			if (kthread_should_stop()) {
++				bao_io_client_destroy(client);
++			}
 +			return -EPERM;
++		}
 +	}
 +
 +	return 0;
@@ -1863,7 +1876,7 @@ index 000000000..11fc7049e
 +	write_unlock_bh(&client->range_lock);
 +}
 +
-+/**
++/** 
 + * Check if the I/O request is in the range
 + * @range: The I/O request range
 + * @req: The I/O request
@@ -1883,7 +1896,7 @@ index 000000000..11fc7049e
 +}
 +
 +/**
-+ * Find the I/O client that the I/O request belongs to
++ * Find the I/O client that the I/O request belongs to 
 + * @dm: The DM that the I/O request belongs to
 + * @req: The I/O request
 + * @return struct bao_io_client*
@@ -2035,7 +2048,7 @@ index 000000000..11fc7049e
 +}
 +
 +/**
-+ * Responsible for dispatching I/O requests for all DMs
++ * Responsible for dispatching I/O requests for all DMs 
 + * if selected the pooling mode
 + */
 +#ifndef CONFIG_BAO_IO_DISPATCHER_INTERRUPT_MODE
@@ -2117,10 +2130,10 @@ index 000000000..11fc7049e
 \ No newline at end of file
 diff --git a/drivers/virt/bao/ioctls.c b/drivers/virt/bao/ioctls.c
 new file mode 100644
-index 000000000..01aabeb81
+index 000000000..e919c4e7d
 --- /dev/null
 +++ b/drivers/virt/bao/ioctls.c
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,212 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao Hypervisor IOCTLs Handler for the I/O Dispatcher kernel module
@@ -2174,11 +2187,14 @@ index 000000000..01aabeb81
 +			return -EINVAL;
 +		}
 +		rc = bao_io_client_attach(dm->control_client);
-+		rc = bao_io_client_request(dm->control_client, req);
-+		if (copy_to_user((void __user *)ioctl_param, req,
-+				 sizeof(struct bao_virtio_request))) {
-+			pr_err("%s: copy_to_user failed\n", __FUNCTION__);
-+			return -EFAULT;
++		if (rc == 0) {
++			rc = bao_io_client_request(dm->control_client, req);
++			if (copy_to_user((void __user *)ioctl_param, req,
++					 sizeof(struct bao_virtio_request))) {
++				pr_err("%s: copy_to_user failed\n",
++				       __FUNCTION__);
++				return -EFAULT;
++			}
 +		}
 +		kfree(req);
 +		break;
@@ -2244,7 +2260,7 @@ index 000000000..01aabeb81
 + * @ioctl_param: The ioctl parameter
 + */
 +static long bao_io_dispatcher_dev_ioctl(struct file *filp, unsigned int cmd,
-+			  unsigned long ioctl_param)
++					unsigned long ioctl_param)
 +{
 +	int rc = -EINVAL;
 +	unsigned int id;
@@ -2332,10 +2348,10 @@ index 000000000..01aabeb81
 +MODULE_DESCRIPTION("Bao Hypervisor I/O Dispatcher");
 diff --git a/drivers/virt/bao/ioeventfd.c b/drivers/virt/bao/ioeventfd.c
 new file mode 100644
-index 000000000..22d4f4feb
+index 000000000..91b18ffce
 --- /dev/null
 +++ b/drivers/virt/bao/ioeventfd.c
-@@ -0,0 +1,314 @@
+@@ -0,0 +1,312 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao Hypervisor Ioeventfd Client
@@ -2386,7 +2402,7 @@ index 000000000..22d4f4feb
 +}
 +
 +/**
-+ * Check if the configuration of ioeventfd is valid
++ * Check if the configuration of ioeventfd is valid 
 + * @config: The configuration of ioeventfd
 + * @return: bool
 + */
@@ -2579,9 +2595,9 @@ index 000000000..22d4f4feb
 +	* I/O requests are dispatched by range check only, so a
 +	* bao_io_client need process both READ and WRITE accesses
 +	* of same range. READ accesses are safe to be ignored here
-+	* because virtio MMIO drivers only write into the notify
++	* because virtio MMIO drivers only write into the notify 
 +	* register (`QueueNotify` field) for notification.
-+	* In fact, the read request won't exist since
++	* In fact, the read request won't exist since 
 +	* the `QueueNotify` field is WRITE ONLY from the driver
 +	* and read only from the device.
 +	*/
@@ -2642,8 +2658,6 @@ index 000000000..22d4f4feb
 +{
 +	struct ioeventfd *p, *next;
 +
-+	// destroy the Ioeventfd client
-+	bao_io_client_destroy(dm->ioeventfd_client);
 +	mutex_lock(&dm->ioeventfds_lock);
 +	// shutdown all the ioeventfds
 +	list_for_each_entry_safe(p, next, &dm->ioeventfds, list)
@@ -2653,7 +2667,7 @@ index 000000000..22d4f4feb
 \ No newline at end of file
 diff --git a/drivers/virt/bao/irqfd.c b/drivers/virt/bao/irqfd.c
 new file mode 100644
-index 000000000..4cfe5dfb3
+index 000000000..ff4e8be18
 --- /dev/null
 +++ b/drivers/virt/bao/irqfd.c
 @@ -0,0 +1,303 @@
@@ -2737,7 +2751,7 @@ index 000000000..4cfe5dfb3
 + * @mode: Mode
 + * @sync: Sync
 + * @key: Poll bits
-+ * @return int
++ * @return int 
 + */
 +static int bao_irqfd_wakeup(wait_queue_entry_t *wait, unsigned int mode,
 +			    int sync, void *key)
@@ -2765,7 +2779,7 @@ index 000000000..4cfe5dfb3
 +}
 +
 +/**
-+ * Register the file descriptor with the poll table and associate it with a wait queue
++ * Register the file descriptor with the poll table and associate it with a wait queue 
 + * that the kernel will monitor for events
 + * @file: The file to poll
 + * @wqh: The wait queue head
@@ -2963,7 +2977,7 @@ index 000000000..4cfe5dfb3
 \ No newline at end of file
 diff --git a/include/uapi/linux/bao.h b/include/uapi/linux/bao.h
 new file mode 100644
-index 000000000..0623cafb8
+index 000000000..399a9ee2e
 --- /dev/null
 +++ b/include/uapi/linux/bao.h
 @@ -0,0 +1,95 @@
@@ -2995,7 +3009,7 @@ index 000000000..0623cafb8
 +#define BAO_NAME_MAX_LEN 32
 +#define BAO_IO_REQUEST_MAX 64
 +
-+/**
++/** 
 + * Contains the specific parameters of a Bao VirtIO request
 + * @virtio_id: VirtIO ID (used to connect each frontend driver to the backend device)
 + * @addr: Gives the MMIO register address that was accessed
