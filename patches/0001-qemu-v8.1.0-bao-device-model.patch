@@ -1,0 +1,1550 @@
+diff --git a/accel/Kconfig b/accel/Kconfig
+index 8bdedb7d15..bcd88144d1 100644
+--- a/accel/Kconfig
++++ b/accel/Kconfig
+@@ -19,3 +19,6 @@ config KVM
+ config XEN
+     bool
+     select FSDEV_9P if VIRTFS
++
++config BAO
++    bool
+\ No newline at end of file
+diff --git a/accel/bao/bao-all.c b/accel/bao/bao-all.c
+new file mode 100644
+index 0000000000..e5c35ef864
+--- /dev/null
++++ b/accel/bao/bao-all.c
+@@ -0,0 +1,665 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Source File
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * Author:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/module.h"
++#include "qapi/error.h"
++#include "qemu/accel.h"
++#include "qemu/atomic.h"
++#include "sysemu/cpus.h"
++#include "sysemu/runstate.h"
++#include "sysemu/bao.h"
++#include "hw/boards.h"
++#include "hw/pci/pci.h"
++#include "hw/pci/pci_bus.h"
++#include "migration/vmstate.h"
++#include "qemu/option.h"
++#include "qemu/config-file.h"
++#include "qemu/qemu-options.h"
++#include "hw/arm/virt.h"
++#include "hw/arm/virt-bao.h"
++#include <stdarg.h>
++#include <sys/ioctl.h>
++#include "bao.h"
++#include "qemu/event_notifier.h"
++
++/**
++ * qemu-aarch64-virt first device IRQ number
++ * The subsequent IRQ numbers are assigned to the devices
++ */
++#define BAO_QEMU_AARCH64_VIRT_FIRST_DEV_IRQ 0x2f
++
++/**< IRQ offset calculator for the IRQ array  for qemu-aarch64-virt */
++#define IRQ_OFFSET (BAO_QEMU_AARCH64_VIRT_FIRST_DEV_IRQ - BAO_DM_NUM_MAX + 1)
++
++/**< Calculate the IRQ index */
++#define CALCULATE_IRQ_IDX(irq) (irq - IRQ_OFFSET)
++
++/**< Bao allowed flag */
++bool bao_allowed;
++
++/**< QEMU thread to handle the control path */
++static QemuThread control_plane_thread;
++
++/**< QEMU thread to handle the data path */
++static QemuThread data_plane_thread;
++
++/**
++ * @brief Control plane worker thread
++ * @param opaque Pointer to the BaoDM structure
++ * @return NULL 
++ */
++static void *control_plane_worker_thread(void *opaque);
++
++/**
++ * @brief Data plane worker thread
++ * @param opaque Pointer to the BaoDM structure
++ * @return NULL 
++ */
++static void *data_plane_worker_thread(void *opaque);
++
++/**
++ * @struct BaoDM
++ * @brief Bao device model structure
++ */
++typedef struct BaoDM
++{
++    struct bao_frontend_dm dm;      /**< Frontend DM */
++    MemoryListener mem_listener;    /**< Memory listener (used for I/O eventfd) */
++    EventNotifier irqfd;            /**< Event notifier (used for IRQ eventfd) */
++} BaoDM;
++
++/**
++ * @struct BaoState
++ * @brief Bao state structure
++ */
++typedef struct BaoState
++{
++    AccelState parent_obj;                  /**< Parent object */
++    int dm_num;                             /**< Number of DMs */
++    struct BaoDM dm[BAO_DM_NUM_MAX];        /**< DM array */
++} BaoState;
++
++/**< Name of the Bao accelerator */
++#define TYPE_BAO_ACCEL ACCEL_CLASS_NAME("bao")
++
++/**< BaoState instance checker */
++DECLARE_INSTANCE_CHECKER(BaoState, BAO_STATE, TYPE_BAO_ACCEL)
++
++/**
++ * IRQ pending array used to check atomically if an IRQ is pending
++ * for a specific QEMU device.
++ * This is necessary beacuse QEMU's devices inject IRQs into the interrupt
++ * controller (bao_intc) which in turn sets the IRQ pending flag.
++ * The same applies to vhost and vhost-user devices, since QEMU mantains a loop
++ * to check the irqfd file descriptor to check if an IRQ is pending and if so,
++ * it injects the IRQ into the interrupt controller.
++ */
++static volatile int irq_pending[BAO_DM_NUM_MAX] = {0};
++
++/**< Device IRQ array used to store the IRQ number for each QEMU device */
++static int device_irq[BAO_DM_NUM_MAX] = {0};
++
++/**< Bao command parameters */
++struct bao_cmd_params bao_cmd_params[BAO_DM_NUM_MAX];
++
++int bao_dm_get_info(struct bao_frontend_dm *self)
++{
++    struct bao_dm_info info;
++    int ret;
++    info.dm_id = self->dm_id;
++    info.shmem_addr = 0;
++    info.shmem_size = 0;
++    info.irq = 0;
++    info.fd = 0;
++
++    if (self->fd < 0)
++        return -1;
++
++    ret = ioctl(self->fd, BAO_IOCTL_IO_DM_GET_INFO, &info);
++
++    if (ret < 0)
++        return -1;
++
++    self->dm_fd = info.fd;
++    self->shmem_addr = info.shmem_addr;
++    self->shmem_size = info.shmem_size;
++    return self->dm_fd;
++}
++
++int bao_attach_io_client(struct bao_frontend_dm *self, struct bao_virtio_request *req)
++{
++    return ioctl(self->dm_fd, BAO_IOCTL_IO_CLIENT_ATTACH, req);
++}
++
++int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req)
++{
++    return ioctl(self->dm_fd, BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED, req);
++}
++
++int bao_create_ioeventfd(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd)
++{
++    return ioctl(self->dm_fd, BAO_IOCTL_IOEVENTFD, ioeventfd);
++}
++
++int bao_create_irqfd(struct bao_frontend_dm *self, struct bao_irqfd *irqfd)
++{
++    return ioctl(self->dm_fd, BAO_IOCTL_IRQFD, irqfd);
++}
++
++struct bao_frontend_dm bao_create_dm(struct bao_cmd_params params)
++{
++    struct bao_frontend_dm vm;
++    vm.fd = open("/dev/bao-io-dispatcher", O_RDWR);
++    vm.dm_id = params.dm_id;
++    vm.dm_fd = -1;
++    vm.irq = params.irq;
++    vm.shmem_addr = 0;
++    vm.shmem_size = 0;
++    vm.get_info = bao_dm_get_info;
++    vm.attach_io_client = bao_attach_io_client;
++    vm.notify_io_completed = bao_notify_io_completed;
++    vm.configure_ioeventfd = bao_create_ioeventfd;
++    vm.configure_irqfd = bao_create_irqfd;
++    if (vm.get_info(&vm) < 0) {
++        error_report("Failed to get DM info");
++        exit(1);
++    }
++    return vm;
++}
++
++void bao_set_irq(int irq, bool value)
++{
++    /**< Update the IRQ number index */
++    int irq_idx = CALCULATE_IRQ_IDX(irq);
++
++    /**< Check if the IRQ number is the same as the device IRQ */
++    if (device_irq[irq_idx] == irq)
++        qatomic_set(&irq_pending[irq_idx], value);
++}
++
++/**
++ * @brief Check if the IRQ flag is set
++ * @param irq QEMU device IRQ number to check
++ * @return Returns true if the IRQ flag is set, false otherwise
++ */
++static bool bao_irq_is_pending(int irq)
++{
++    /**< Update the IRQ number index */
++    int irq_idx = CALCULATE_IRQ_IDX(irq);
++
++    return qatomic_read(&irq_pending[irq_idx]);
++}
++
++/**
++ * @brief Configure a I/O eventfd
++ * @param s BaoDM
++ * @param fd File descriptor to configure
++ * @param addr Address to configure (for MMIO devices the address offset is 0x50)
++ * @param data Virqueue index if datamatch is set
++ * @param assign Assign or deassign the ioevendfd
++ * @param size Size of the region to configure (generally 4 bytes)
++ * @param datamatch Data to match (support for one ioevendfd per virtqueue)
++ * @return Returns 0 on success, <0 on failure
++ */
++static int bao_ioeventfd_set(BaoDM *s, int fd, hwaddr addr, uint32_t data,
++                             bool assign, uint32_t size, bool datamatch)
++{
++    struct bao_ioeventfd config = {
++        .fd = fd,
++        .addr = addr,
++        .len = size,
++        .data = datamatch ? data : 0,
++        .flags = BAO_IOEVENTFD_FLAG_ASSIGN,
++    };
++
++    if (datamatch)
++    {
++        config.flags |= BAO_IOEVENTFD_FLAG_DATAMATCH;
++    }
++
++    if (!assign)
++    {
++        config.flags |= BAO_IOEVENTFD_FLAG_DEASSIGN;
++    }
++
++    return s->dm.configure_ioeventfd(&s->dm, &config);
++}
++
++/**
++ * @brief Configure a IRQ eventfd
++ * @param s BaoDM
++ * @param fd File descriptor to configure
++ * @param assign Assign or deassign the irqfd
++ * @return Returns 0 on success, <0 on failure
++ */
++static int bao_irqfd_set(BaoDM *s, int fd, bool assign)
++{
++    struct bao_irqfd config = {
++        .fd = fd,
++        .flags = BAO_IRQFD_FLAG_ASSIGN,
++    };
++
++    if (!assign)
++    {
++        config.flags |= BAO_IRQFD_FLAG_DEASSIGN;
++    }
++
++    return s->dm.configure_irqfd(&s->dm, &config);
++}
++
++/**
++ * @brief Setup the Bao worker threads
++ * @note Invoked after the machine is setup
++ * @param ms MachineState
++ * @param accel AccelState
++ */
++static void bao_setup_post(MachineState *ms, AccelState *accel)
++{
++    BaoState *s = BAO_STATE(ms->accelerator);
++    char name[32];
++
++    for (int i = 0; i < s->dm_num; i++)
++    {
++        snprintf(name, sizeof(name), "crt-pln-dm-%d", i);
++
++        /**< Create the QEMU thread to handle the control path */
++        qemu_thread_create(&control_plane_thread, name,
++                       control_plane_worker_thread, &s->dm[i], QEMU_THREAD_JOINABLE);
++
++        snprintf(name, sizeof(name), "dat-pln-dm-%d", i);
++
++        /**< Create the QEMU thread to handle the data path */
++        qemu_thread_create(&data_plane_thread, name,
++                        data_plane_worker_thread, &s->dm[i], QEMU_THREAD_JOINABLE);
++    }
++}
++
++/**
++ * @brief Handle the I/O request
++ * @param s BaoDM
++ */
++static inline void handle_io_req(BaoDM *s)
++{
++    MemTxResult ret = MEMTX_OK;
++
++    qemu_mutex_lock_iothread();
++
++    switch (s->dm.req.op)
++    {
++    case BAO_IO_WRITE:
++        ret = address_space_write(&address_space_memory, s->dm.req.addr, MEMTXATTRS_UNSPECIFIED, &s->dm.req.value, s->dm.req.access_width);
++        break;
++    case BAO_IO_READ:
++        ret = address_space_read(&address_space_memory, s->dm.req.addr, MEMTXATTRS_UNSPECIFIED, &s->dm.req.value, s->dm.req.access_width);
++        break;
++    case BAO_IO_ASK:
++    case BAO_IO_NOTIFY:
++        break;
++    default:
++        error_report("invalid ioreq direction (%d)", (int)s->dm.req.op);
++        break;
++    }
++
++    qemu_mutex_unlock_iothread();
++
++    if (ret != MEMTX_OK)
++    {
++        error_report("failed to %s memory at 0x%lx",
++                     s->dm.req.op == BAO_IO_WRITE ? "write" : "read",
++                     (unsigned long)s->dm.req.addr);
++    }
++}
++
++static void *control_plane_worker_thread(void *opaque)
++{
++    BaoDM *s = opaque;
++    int rc = 0;
++
++    for (;;)
++    {
++        s->dm.req.virtio_id = 0x0;
++        s->dm.req.addr = 0x0;
++        s->dm.req.op = BAO_IO_ASK;
++        s->dm.req.value = 0x0;
++        s->dm.req.access_width = 0x0;
++        s->dm.req.cpu_id = 0x0;
++        s->dm.req.vcpu_id = 0x0;
++        s->dm.req.ret = 0x0;
++
++        /**< Attach the control client */
++        rc = s->dm.attach_io_client(&s->dm, &s->dm.req);
++        if (rc < 0)
++            return NULL;
++
++        /**< Handle the I/O request */
++        handle_io_req(s);
++
++        /**< Notify I/O completed */
++        rc = s->dm.notify_io_completed(&s->dm, &s->dm.req);
++        if (rc < 0)
++            return NULL;
++    }
++
++    return NULL;
++}
++
++static void *data_plane_worker_thread(void *opaque)
++{
++    BaoDM *s = opaque;
++
++    /**< Create a file descriptor for the irqfd */
++    int rc = event_notifier_init(&s->irqfd, false);
++    if (rc < 0)
++        return NULL;
++
++    /**< Extract the file descriptor */
++    int fd = event_notifier_get_fd(&s->irqfd);
++
++    /**< Configure the irqfd */
++    rc = bao_irqfd_set(s, fd, true);
++    if (rc < 0)
++        return NULL;
++
++    for (;;)
++    {
++        /**< Check for pending IRQs */
++        if (bao_irq_is_pending(s->dm.irq))
++        {
++            qemu_mutex_lock_iothread();
++
++            /**< Inject an irqfd */
++            rc = event_notifier_set(&s->irqfd);
++
++            /**< Clear the IRQ flag */
++            bao_set_irq(s->dm.irq, false);
++
++            qemu_mutex_unlock_iothread();
++        }
++    }
++
++    return NULL;
++}
++
++/**
++ * @brief Add a I/O eventfd
++ * @param listener MemoryListener (contains the event to listen)
++ * @param section MemoryRegionSection (contains the offset and size associated with the event to listen)
++ * @param datamatch Data to match (support for one ioevendfd per virtqueue)
++ * @param data Virqueue index if datamatch is set
++ * @param e EventNotifier (contains the ioeventfd)
++ */
++static void bao_io_ioeventfd_add(MemoryListener *listener,
++                                 MemoryRegionSection *section,
++                                 bool datamatch, uint64_t data,
++                                 EventNotifier *e)
++{
++    BaoDM *s = container_of(listener, BaoDM, mem_listener);
++    int fd = event_notifier_get_fd(e);
++    int rc;
++
++    rc = bao_ioeventfd_set(s, fd, section->offset_within_address_space,
++                           data, true, int128_get64(section->size),
++                           datamatch);
++    if (rc < 0)
++    {
++        error_report("Adding ioeventfd: %s\n", strerror(-rc));
++        exit(1);
++    }
++}
++
++/**
++ * @brief Delete a I/O eventfd
++ * @param listener MemoryListener (contains the event to listen)
++ * @param section MemoryRegionSection (contains the offset and size associated with the event to listen)
++ * @param datamatch Data to match (support for one ioevendfd per virtqueue)
++ * @param data Virqueue index if datamatch is set
++ * @param e EventNotifier (contains the ioeventfd)
++ */
++static void bao_io_ioeventfd_del(MemoryListener *listener,
++                                 MemoryRegionSection *section,
++                                 bool datamatch, uint64_t data,
++                                 EventNotifier *e)
++
++{
++    BaoDM *s = container_of(listener, BaoDM, mem_listener);
++    int fd = event_notifier_get_fd(e);
++    int rc;
++
++    rc = bao_ioeventfd_set(s, fd, section->offset_within_address_space,
++                           data, false, int128_get64(section->size),
++                           datamatch);
++    if (rc < 0)
++    {
++        error_report("Deleting ioeventfd: %s\n", strerror(-rc));
++        exit(1);
++    }
++}
++
++/**
++ * @brief Add a region
++ * @param listener MemoryListener
++ * @param section MemoryRegionSection
++ */
++static void bao_region_add(MemoryListener *listener, MemoryRegionSection *section)
++{
++}
++
++/**
++ * @brief Delete a region
++ * @param listener MemoryListener
++ * @param section MemoryRegionSection
++ */
++static void bao_region_del(MemoryListener *listener, MemoryRegionSection *section)
++{
++}
++
++/**
++ * @brief Change the state handler
++ * @param opaque BaoState
++ * @param running Specifies whether the DM is running or not
++ * @param state RunState
++ */
++static void bao_change_state_handler(void *opaque, bool running, RunState state)
++{
++    if (running) 
++    {
++        info_report("Starting QEMU app...\n");
++    }
++}
++
++/**
++ * @brief Tokenize a string
++ * @param optarg String to tokenize
++ * @param delim Delimiter
++ * @param tokens Array to store the tokens
++ * @param max_tokens Maximum number of tokens to tokenize
++ * @return Returns the number of tokens
++ */
++static int bao_tokenizer(const char *optarg, const char *delim, int tokens[], int max_tokens)
++{
++    char *token;
++    int i = 0;
++
++    char *optarg_cpy = strdup(optarg);
++
++    token = strtok(optarg_cpy, delim);
++    while (token != NULL && i < max_tokens)
++    {
++        tokens[i++] = strtoull(token, NULL, 10);
++        token = strtok(NULL, delim);
++    }
++
++    free(optarg_cpy);
++
++    return i;
++}
++
++/**
++ * @brief Parse the command line arguments
++ * @return Returns the number of DMs
++ */
++static int bao_parse_cmdline(void)
++{
++    int dms[BAO_DM_NUM_MAX];
++    int irqs[BAO_DM_NUM_MAX];
++
++    const char *vms_str = qemu_opt_get(qemu_find_opts_singleton("bao"), "dm_id");
++    const char *irqs_str = qemu_opt_get(qemu_find_opts_singleton("bao"), "irq");
++
++    if (vms_str == NULL || irqs_str == NULL)
++    {
++        error_report("Failed to parse command line arguments.\n");
++        exit(1);
++    }
++
++    int num_dms = bao_tokenizer(vms_str, "-", dms, BAO_DM_NUM_MAX);
++    int num_irqs = bao_tokenizer(irqs_str, "-", irqs, BAO_DM_NUM_MAX);
++
++    /**< Check if the number of DMs and IRQs are the same since each DM holds/configures one and only one device */
++    if (num_dms != num_irqs)
++    {
++        error_report("The number of DMs and IRQs must be the same.\n");
++        exit(1);
++    }
++
++    /**< Update the bao_cmd_params array */
++    for (int i = 0; i < num_dms; i++)
++    {
++        bao_cmd_params[i].dm_id = dms[i];
++        bao_cmd_params[i].irq = irqs[i];
++    }
++
++    return num_dms;
++}
++
++/**
++ * @brief Bao accelerator initialization routine
++ * @param ms specifies the MachineState
++ * @return Always returns 0, otherwise the QEMU will exit
++ */
++static int bao_init(MachineState *ms)
++{
++    BaoState *s = BAO_STATE(ms->accelerator);
++    uint64_t shmem_addr = 0;
++    uint64_t shmem_size = 0;
++
++    for (volatile int i = 0; i < BAO_DM_NUM_MAX; i++)
++    {
++        bao_cmd_params[i].dm_id = 0;
++        bao_cmd_params[i].irq = 0;
++    }
++
++    /**< Parse the command line arguments */
++    s->dm_num = bao_parse_cmdline();
++    if (!s->dm_num)
++    {
++        error_report("Failed to parse command line arguments.\n");
++        exit(1);
++    }
++
++    for (volatile int i = 0; i < s->dm_num; i++)
++    {
++        /**< Create the DM */
++        s->dm[i].dm = bao_create_dm(bao_cmd_params[i]);
++
++        /**< Update the shared memory size */
++        shmem_size += s->dm[i].dm.shmem_size;
++    }
++
++    /*
++    * Set the shared memory base address as the first shared memory address
++    * Note: If QEMU is running more than one device, the shared memory address
++    * must be contiguous
++    */
++    shmem_addr = s->dm[0].dm.shmem_addr;
++
++    /**< Set QEMU virtual memory map */
++    bao_virt_memmap_set(shmem_addr, shmem_size);
++
++    for (volatile int i = 0; i < s->dm_num; i++)
++    {
++        /**< Update the device IRQ */
++        device_irq[CALCULATE_IRQ_IDX(bao_cmd_params[i].irq)] = bao_cmd_params[i].irq;
++
++        /**< Setup the memory listeners */
++        s->dm[i].mem_listener.eventfd_add = bao_io_ioeventfd_add;
++        s->dm[i].mem_listener.eventfd_del = bao_io_ioeventfd_del;
++        s->dm[i].mem_listener.region_add = bao_region_add;
++        s->dm[i].mem_listener.region_del = bao_region_del;
++        memory_listener_register(&s->dm[i].mem_listener, &address_space_memory);
++    }
++
++    qemu_add_vm_change_state_handler(bao_change_state_handler, s);
++
++    return 0;
++}
++
++/**
++ * @brief Bao accelerator class initialization routine
++ * @param oc ObjectClass
++ * @param data specifies the data
++ */
++static void bao_accel_class_init(ObjectClass *oc, void *data)
++{
++    AccelClass *ac = ACCEL_CLASS(oc);
++
++    ac->name = "bao";
++    ac->init_machine = bao_init;
++    ac->setup_post = bao_setup_post;
++    ac->allowed = &bao_allowed;
++}
++
++/**
++ * @brief Bao accelerator instance initialization routine
++ * @param obj Object
++ */
++static void bao_accel_instance_init(Object *obj)
++{
++}
++
++/**< Bao accelerator type */
++static const TypeInfo bao_accel_type = {
++    .name = TYPE_BAO_ACCEL,
++    .parent = TYPE_ACCEL,
++    .instance_init = bao_accel_instance_init,
++    .class_init = bao_accel_class_init,
++    .instance_size = sizeof(BaoState),
++};
++
++/**
++ * @brief Bao accelerator operations class initialization routine
++ * @param oc ObjectClass
++ * @param ObjectClass data
++ */
++static void bao_accel_ops_class_init(ObjectClass *oc, void *data)
++{
++    AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
++    ops->create_vcpu_thread = dummy_start_vcpu_thread;
++}
++
++/**< Bao accelerator operations type */
++static const TypeInfo bao_accel_ops_type = {
++    .name = ACCEL_OPS_NAME("bao"),
++    .parent = TYPE_ACCEL_OPS,
++    .class_init = bao_accel_ops_class_init,
++    .abstract = true,
++};
++
++/**
++ * @brief Bao type initialization routine
++ */
++static void bao_type_init(void)
++{
++    type_register_static(&bao_accel_type);
++    type_register_static(&bao_accel_ops_type);
++}
++type_init(bao_type_init);
+\ No newline at end of file
+diff --git a/accel/bao/bao.h b/accel/bao/bao.h
+new file mode 100644
+index 0000000000..ed4cf5b759
+--- /dev/null
++++ b/accel/bao/bao.h
+@@ -0,0 +1,151 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bao Header File
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *  
++ * Author:
++ *	João Peixoto <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef __BAO_H
++#define __BAO_H
++
++#include "qemu/error-report.h"
++#include <stdio.h>
++#include <stdint.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include "sysemu/bao.h"
++
++#define BAO_IO_WRITE 0x0
++#define BAO_IO_READ 0x1
++#define BAO_IO_ASK 0x2
++#define BAO_IO_NOTIFY 0x3
++
++/**
++ * @struct bao_virtio_request
++ * @brief Bao VirtIO request structure
++ */
++struct bao_virtio_request {
++	uint64_t virtio_id;     /**< VirtIO ID */
++	uint64_t addr;          /**< MMIO address */
++	uint64_t op;            /**< Operation */
++	uint64_t value;         /**< Value */
++	uint64_t access_width;  /**< Access width */
++    uint64_t cpu_id;        /**< Frontend CPU ID */
++    uint64_t vcpu_id;       /**< Frontend VCPU ID */
++	int32_t ret;            /**< Return value */
++};
++
++/**
++ * @struct bao_ioeventfd
++ * @brief Bao ioeventfd structure
++ */
++struct bao_ioeventfd {
++	uint32_t fd;            /**< File descriptor */
++	uint32_t flags;         /**< Flags (BAO_IOEVENTFD_FLAG_*) */
++	uint64_t addr;          /**< MMIO address */
++	uint32_t len;           /**< Length */
++	uint32_t reserved;      /**< Reserved */
++	uint64_t data;          /**< Data (Virtqueue index if datamatch) */
++};
++
++/**
++ * @struct bao_irqfd
++ * @brief Bao irqfd structure
++ */
++struct bao_irqfd {
++	int32_t fd;             /**< File descriptor */
++	uint32_t flags;         /**< Flags (BAO_IRQFD_FLAG_*) */
++};
++
++/**
++ * @struct bao_cmd_params
++ * @brief Bao's command line parameters structure
++ */
++struct bao_cmd_params
++{
++    int64_t dm_id;          /**< Device Model ID */
++    int64_t irq;            /**< QEMU IRQ device number (e.g., qemu-arch64-virt allocates the first device with an IRQ number of 0x2f and goes down from there) */
++};
++
++/**
++ * @brief Bao ioeventfd flags
++ */
++#define BAO_IOEVENTFD_FLAG_ASSIGN 0x00
++#define BAO_IOEVENTFD_FLAG_DATAMATCH (1 << 1)
++#define BAO_IOEVENTFD_FLAG_DEASSIGN (1 << 2)
++
++/**
++ * @brief Bao irqfd flags
++ */
++#define BAO_IRQFD_FLAG_ASSIGN 0x00
++#define BAO_IRQFD_FLAG_DEASSIGN	0x01
++
++/**
++ * @struct bao_frontend_dm
++ * @brief Bao frontend device model structure
++ */
++struct bao_frontend_dm {
++    int fd;                                                                                         /**< Bao file descriptor */
++    int dm_fd;                                                                                      /**< DM file descriptor */
++    uint64_t dm_id;                                                                                 /**< DM ID (or VirtIO ID) */
++    int irq;                                                                                        /**< QEMU device IRQ number */
++    uint64_t shmem_addr;                                                                            /**< Shared memory base address */
++    uint64_t shmem_size;                                                                            /**< Shared memory size */
++    struct bao_virtio_request req;                                                                  /**< VirtIO request */
++    int (*get_info)(struct bao_frontend_dm *self);                                                  /**< Get DM info method */
++    int (*attach_io_client)(struct bao_frontend_dm *self, struct bao_virtio_request *req);          /**< Attach IO Client method */
++    int (*notify_io_completed)(struct bao_frontend_dm *self, struct bao_virtio_request *req);       /**< Notify IO completed method */
++    int (*configure_ioeventfd)(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd);      /**< Configure ioeventfd method */
++    int (*configure_irqfd)(struct bao_frontend_dm *self, struct bao_irqfd *irqfd);                  /**< Configure irqfd method */
++};
++
++/**
++ * @brief Get DM info
++ * @param self Bao frontend device model
++ * @return Returns the DM file descriptor on success, -1 on failure
++ */
++int bao_dm_get_info(struct bao_frontend_dm *self);
++
++/**
++ * @brief Attach I/O client (control client)
++ * @param self Bao frontend device model
++ * @param req VirtIO request that will be updated when the thread receives a response
++ * @return Returns 0 on success, -1 on failure
++ */
++int bao_attach_io_client(struct bao_frontend_dm *self, struct bao_virtio_request *req);
++
++/**
++ * @brief Notify I/O completed
++ * @param self Bao frontend device model
++ * @param req VirtIO request to update
++ * @return Returns 0 on success, -1 on failure
++ */
++int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req);
++
++/**
++ * @brief Create ioeventfd
++ * @param self Bao frontend device model
++ * @param ioeventfd ioeventfd structure to configure
++ * @return Returns 0 on success, -1 on failure
++ */
++int bao_create_ioeventfd(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd);
++
++/**
++ * @brief Create irqfd
++ * @param self Bao frontend device model
++ * @param irqfd irqfd structure to configure
++ * @return Returns 0 on success, -1 on failure
++ */
++int bao_create_irqfd(struct bao_frontend_dm *self, struct bao_irqfd *irqfd);
++
++/**
++ * @brief Create Bao frontend device model
++ * @param params Bao command line parameters
++ * @return Returns the Bao frontend device model
++ */
++struct bao_frontend_dm bao_create_dm(struct bao_cmd_params params);
++
++#endif // __BAO_IOREQ_API_H
+\ No newline at end of file
+diff --git a/accel/bao/meson.build b/accel/bao/meson.build
+new file mode 100644
+index 0000000000..d3aa36eb7b
+--- /dev/null
++++ b/accel/bao/meson.build
+@@ -0,0 +1 @@
++specific_ss.add(when: 'CONFIG_BAO', if_true: files('bao-all.c'))
+\ No newline at end of file
+diff --git a/configs/devices/aarch64-softmmu/default.mak b/configs/devices/aarch64-softmmu/default.mak
+index f82a04c27d..3345c87895 100644
+--- a/configs/devices/aarch64-softmmu/default.mak
++++ b/configs/devices/aarch64-softmmu/default.mak
+@@ -8,3 +8,5 @@ include ../arm-softmmu/default.mak
+ # CONFIG_XLNX_ZYNQMP_ARM=n
+ # CONFIG_XLNX_VERSAL=n
+ # CONFIG_SBSA_REF=n
++CONFIG_ARM_VIRT=y
++CONFIG_BAO=y
+diff --git a/configs/devices/aarch64-softmmu/minimal.mak b/configs/devices/aarch64-softmmu/minimal.mak
+index 0ebc1dca56..5d85a5565c 100644
+--- a/configs/devices/aarch64-softmmu/minimal.mak
++++ b/configs/devices/aarch64-softmmu/minimal.mak
+@@ -7,3 +7,4 @@
+ 
+ CONFIG_ARM_VIRT=y
+ CONFIG_SBSA_REF=y
++CONFIG_BAO=y
+\ No newline at end of file
+diff --git a/hw/arm/meson.build b/hw/arm/meson.build
+index 11eb9112f8..1b18fa3332 100644
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -1,5 +1,6 @@
+ arm_ss = ss.source_set()
+ arm_ss.add(files('boot.c'), fdt)
++arm_ss.add(when: 'CONFIG_ARM_VIRT', if_true: files('virt.c', 'virt-bao.c'))
+ arm_ss.add(when: 'CONFIG_ARM_VIRT', if_true: files('virt.c'))
+ arm_ss.add(when: 'CONFIG_ACPI', if_true: files('virt-acpi-build.c'))
+ arm_ss.add(when: 'CONFIG_DIGIC', if_true: files('digic_boards.c'))
+diff --git a/hw/arm/virt-bao.c b/hw/arm/virt-bao.c
+new file mode 100644
+index 0000000000..2016b6c447
+--- /dev/null
++++ b/hw/arm/virt-bao.c
+@@ -0,0 +1,58 @@
++/*
++ * Bao Hypervisor Machine Memory Map
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "exec/address-spaces.h"
++#include "exec/memory.h"
++#include "hw/sysbus.h"
++#include "sysemu/bao.h"
++#include "hw/arm/virt-bao.h"
++#include "hw/pci/pcie_host.h"
++#include "hw/pci/pci.h"
++#include "net/net.h"
++
++/**< Bao memory map struct */
++static MemMapEntry bao_memmap = {0, 0};
++
++void bao_virt_memmap_set(hwaddr base, hwaddr size)
++{
++    bao_memmap.base = base;
++    bao_memmap.size = size;
++}
++
++void bao_virt_memmap_init(VirtMachineState *vms)
++{
++    /**< Check if the machine has a memory map field */
++    if (!vms->memmap) {
++        fprintf(stderr, "No memmap set for machine\n");
++        exit(1);
++    }
++    /**< Check if the memory map is valid */
++    if (bao_memmap.size == 0) {
++        fprintf(stderr, "Invalid Bao memory map\n");
++        exit(1);
++    }
++
++    /**
++     * Check if the memory map base address is >= 1GB
++     * This is a requirement since qemu-arch64-virt starts the 
++     * virtual memory at 1GB
++     * (see base_memmap[VIRT_MEM] >= GiB on /hw/arm/virt.c)
++     */
++    if (bao_memmap.base < 0x40000000) {
++        fprintf(stderr, "Bao memory map base address must be >= 1GB\n");
++        exit(1);
++    }
++
++    /**< Update the memory map */
++    vms->memmap[VIRT_MEM] = bao_memmap;
++}
+\ No newline at end of file
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 7d9dbc2663..384964d9d0 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -37,6 +37,7 @@
+ #include "hw/arm/boot.h"
+ #include "hw/arm/primecell.h"
+ #include "hw/arm/virt.h"
++#include "hw/arm/virt-bao.h"
+ #include "hw/block/flash.h"
+ #include "hw/vfio/vfio-calxeda-xgmac.h"
+ #include "hw/vfio/vfio-amd-xgbe.h"
+@@ -50,6 +51,7 @@
+ #include "sysemu/kvm.h"
+ #include "sysemu/hvf.h"
+ #include "sysemu/qtest.h"
++#include "sysemu/bao.h"
+ #include "hw/loader.h"
+ #include "qapi/error.h"
+ #include "qemu/bitops.h"
+@@ -850,6 +852,19 @@ static void create_gic(VirtMachineState *vms, MemoryRegion *mem)
+     }
+ }
+ 
++/**
++ * @brief Create Bao's interrupt controller
++ * @param vms the virtual machine state
++ */
++static void create_bao_intc(VirtMachineState *vms)
++{
++    vms->gic = qdev_new("bao-intc");
++    qdev_prop_set_uint32(vms->gic, "num-irqs", NUM_IRQS);
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(vms->gic), &error_fatal);
++
++    fdt_add_gic_node(vms);
++}
++
+ static void create_uart(const VirtMachineState *vms, int uart,
+                         MemoryRegion *mem, Chardev *chr)
+ {
+@@ -1766,6 +1781,10 @@ static void virt_set_memmap(VirtMachineState *vms, int pa_bits)
+         vms->memmap[i] = base_memmap[i];
+     }
+ 
++    if (bao_enabled()) {
++        bao_virt_memmap_init(vms);
++    }
++
+     if (ms->ram_slots > ACPI_MAX_RAM_SLOTS) {
+         error_report("unsupported number of memory slots: %"PRIu64,
+                      ms->ram_slots);
+@@ -1925,7 +1944,7 @@ static void finalize_gic_version(VirtMachineState *vms)
+         /* KVM w/o kernel irqchip can only deal with GICv2 */
+         gics_supported |= VIRT_GIC_VERSION_2_MASK;
+         accel_name = "KVM with kernel-irqchip=off";
+-    } else if (tcg_enabled() || hvf_enabled() || qtest_enabled())  {
++    } else if (tcg_enabled() || hvf_enabled() || qtest_enabled() || bao_enabled())  {
+         gics_supported |= VIRT_GIC_VERSION_2_MASK;
+         if (module_object_class_by_name("arm-gicv3")) {
+             gics_supported |= VIRT_GIC_VERSION_3_MASK;
+@@ -2256,7 +2275,11 @@ static void machvirt_init(MachineState *machine)
+ 
+     virt_flash_fdt(vms, sysmem, secure_sysmem ?: sysmem);
+ 
+-    create_gic(vms, sysmem);
++    if (bao_enabled()) {
++        create_bao_intc(vms);
++    } else {
++        create_gic(vms, sysmem);
++    }
+ 
+     virt_cpu_post_init(vms, sysmem);
+ 
+diff --git a/hw/intc/bao_intc.c b/hw/intc/bao_intc.c
+new file mode 100644
+index 0000000000..6d5f7481b6
+--- /dev/null
++++ b/hw/intc/bao_intc.c
+@@ -0,0 +1,102 @@
++/*
++ * Bao Hypervisor Interrupt Controller (INTC) for QEMU
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/module.h"
++#include "qom/object.h"
++#include "hw/sysbus.h"
++#include "qemu/log.h"
++#include "hw/qdev-properties.h"
++#include "gic_internal.h"
++#include "sysemu/bao.h"
++
++#define TYPE_BAO_INTC "bao-intc"
++OBJECT_DECLARE_SIMPLE_TYPE(BaoIntcState, BAO_INTC)
++
++/**
++ * @struct BaoIntcState
++ * @brief Bao Interrupt Controller (INTC) state
++ */
++struct BaoIntcState {
++    SysBusDevice parent_obj;    /**< Parent object */
++    uint32_t num_irqs;          /**< Number of IRQs */
++};
++typedef struct BaoIntcState BaoIntcState;
++
++/**
++ * @brief Bao interrupt controller set method
++ * @param opaque Pointer to the Bao INTC state
++ * @param irq The IRQ number
++ * @param level The IRQ level
++ */
++static void bao_intc_set_irq(void *opaque, int irq, int level)
++{
++    BaoIntcState *s = opaque;
++
++    if (irq < s->num_irqs)
++        bao_set_irq(irq, level);
++}
++
++/**
++ * @brief Bao interrupt controller realize method
++ * @param dev Device state
++ * @param errp Error pointer
++ */
++static void bao_intc_realize(DeviceState *dev, Error **errp)
++{
++    BaoIntcState *s = BAO_INTC(dev);
++
++    if (s->num_irqs > GIC_MAXIRQ) {
++        error_setg(errp,
++                   "requested %u interrupt lines exceeds GIC maximum %d",
++                   s->num_irqs, GIC_MAXIRQ);
++        return;
++    }
++
++    qdev_init_gpio_in(dev, bao_intc_set_irq, s->num_irqs);
++}
++
++static Property bao_intc_properties[] = {
++    DEFINE_PROP_UINT32("num-irqs", BaoIntcState, num_irqs, BAO_DM_NUM_MAX),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++/**
++ * @brief Bao interrupt controller class init method
++ * @param klass Object class
++ * @param data Pointer to the data
++ */
++static void bao_intc_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    device_class_set_props(dc, bao_intc_properties);
++
++    dc->realize = bao_intc_realize;
++}
++
++static const TypeInfo bao_intc_info = {
++    .name = TYPE_BAO_INTC,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(BaoIntcState),
++    .class_init = bao_intc_class_init,
++};
++
++/**
++ * @brief Register the Bao INTC types
++ */
++static void bao_intc_register_types(void)
++{
++    type_register_static(&bao_intc_info);
++}
++
++type_init(bao_intc_register_types)
+diff --git a/hw/intc/meson.build b/hw/intc/meson.build
+index ed355941d1..e579a81fe6 100644
+--- a/hw/intc/meson.build
++++ b/hw/intc/meson.build
+@@ -42,6 +42,7 @@ specific_ss.add(when: 'CONFIG_ARM_GIC', if_true: files('arm_gicv3_cpuif_common.c
+ specific_ss.add(when: 'CONFIG_ARM_GICV3_TCG', if_true: files('arm_gicv3_cpuif.c'))
+ specific_ss.add(when: 'CONFIG_ARM_GIC_KVM', if_true: files('arm_gic_kvm.c'))
+ specific_ss.add(when: ['CONFIG_ARM_GIC_KVM', 'TARGET_AARCH64'], if_true: files('arm_gicv3_kvm.c', 'arm_gicv3_its_kvm.c'))
++specific_ss.add(when: 'CONFIG_BAO', if_true: files('bao_intc.c'))
+ specific_ss.add(when: 'CONFIG_ARM_V7M', if_true: files('armv7m_nvic.c'))
+ specific_ss.add(when: 'CONFIG_GRLIB', if_true: files('grlib_irqmp.c'))
+ specific_ss.add(when: 'CONFIG_IOAPIC', if_true: files('ioapic.c'))
+diff --git a/hw/virtio/virtio-mmio.c b/hw/virtio/virtio-mmio.c
+index c2c6d85475..f02681ca39 100644
+--- a/hw/virtio/virtio-mmio.c
++++ b/hw/virtio/virtio-mmio.c
+@@ -29,6 +29,7 @@
+ #include "qemu/host-utils.h"
+ #include "qemu/module.h"
+ #include "sysemu/kvm.h"
++#include "sysemu/bao.h"
+ #include "sysemu/replay.h"
+ #include "hw/virtio/virtio-mmio.h"
+ #include "qemu/error-report.h"
+@@ -765,6 +766,10 @@ static void virtio_mmio_realizefn(DeviceState *d, Error **errp)
+         proxy->flags &= ~VIRTIO_IOMMIO_FLAG_USE_IOEVENTFD;
+     }
+ 
++    if (bao_eventfds_enabled()) {
++        proxy->flags |= VIRTIO_IOMMIO_FLAG_USE_IOEVENTFD;
++    }
++
+     /* fd-based ioevents can't be synchronized in record/replay */
+     if (replay_mode != REPLAY_MODE_NONE) {
+         proxy->flags &= ~VIRTIO_IOMMIO_FLAG_USE_IOEVENTFD;
+diff --git a/include/hw/arm/virt-bao.h b/include/hw/arm/virt-bao.h
+new file mode 100644
+index 0000000000..d4c0c65d4b
+--- /dev/null
++++ b/include/hw/arm/virt-bao.h
+@@ -0,0 +1,30 @@
++/*
++ * Bao Hypervisor Machine Memory Map
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef QEMU_ARM_BAO_VIRT_H
++#define QEMU_ARM_BAO_VIRT_H
++
++#include "hw/arm/virt.h"
++
++/**
++ * @brief Initialize the memory map for the Bao Hypervisor
++ * @param vms The virtual machine state
++ */
++void bao_virt_memmap_init(VirtMachineState *vms);
++
++/**
++ * @brief Sets the memory map for the Bao Hypervisor
++ * @param base The base address of the memory map
++ * @param size The size of the memory map
++ */
++void bao_virt_memmap_set(hwaddr base, hwaddr size);
++
++#endif
+\ No newline at end of file
+diff --git a/include/sysemu/bao.h b/include/sysemu/bao.h
+new file mode 100644
+index 0000000000..422ff12e7e
+--- /dev/null
++++ b/include/sysemu/bao.h
+@@ -0,0 +1,73 @@
++/*
++ * QEMU Bao support
++ *
++ * Copyright (c) Bao Project and Contributors. All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0
++ *
++ * Authors:
++ *  João Peixoto   <joaopeixotooficial@gmail.com>
++ */
++
++#ifndef BAO_H
++#define BAO_H
++
++#include <sys/ioctl.h>
++#include <stdint.h>
++
++/**
++ * @struct bao_dm_info
++ * @brief Bao device model info structure
++ */
++struct bao_dm_info
++{
++    int32_t dm_id;          /**< Device Model ID */
++    uint64_t shmem_addr;    /**< Shared memory base address */
++    uint64_t shmem_size;    /**< Shared memory size */
++    uint32_t irq;           /**< Device model IRQ number */
++    int32_t fd;             /**< Device model file descriptor */
++};
++
++/**
++ * @brief Bao IOCTLs
++ */
++#define BAO_IOCTL_TYPE 0xA6
++#define BAO_IOCTL_IO_DM_GET_INFO _IOWR(BAO_IOCTL_TYPE, 0x01, struct bao_dm_info)
++#define BAO_IOCTL_IO_CLIENT_ATTACH _IOWR(BAO_IOCTL_TYPE, 0x02, struct bao_virtio_request)
++#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED \
++	_IOW(BAO_IOCTL_TYPE, 0x03, struct bao_virtio_request)
++#define BAO_IOCTL_IOEVENTFD _IOW(BAO_IOCTL_TYPE, 0x04, struct bao_ioeventfd)
++#define BAO_IOCTL_IRQFD _IOW(BAO_IOCTL_TYPE, 0x05, struct bao_irqfd)
++
++#ifdef NEED_CPU_H
++#ifdef CONFIG_BAO
++#define CONFIG_BAO_IS_POSSIBLE
++#endif
++#else
++#define CONFIG_BAO_IS_POSSIBLE
++#endif
++
++#ifdef CONFIG_BAO_IS_POSSIBLE
++
++extern bool bao_allowed;
++
++#define bao_enabled() (bao_allowed)
++#define bao_eventfds_enabled() (true)
++
++#define BAO_DM_NUM_MAX 16
++
++/**
++ * @brief Set the IRQ flag
++ * @param irq QEMU device IRQ number
++ * @param value Value to set the IRQ flag
++ */
++void bao_set_irq(int irq, bool value);
++
++#else /* !CONFIG_BAO_IS_POSSIBLE */
++
++#define bao_enabled() (false)
++#define bao_eventfds_enabled() (false)
++
++#endif /* CONFIG_BAO_IS_POSSIBLE */
++
++#endif /* BAO_H */
+\ No newline at end of file
+diff --git a/meson.build b/meson.build
+index 98e68ef0b1..bd433da1cc 100644
+--- a/meson.build
++++ b/meson.build
+@@ -147,6 +147,12 @@ if cpu in ['x86', 'x86_64']
+   }
+ endif
+ 
++if cpu in ['aarch64']
++  accelerator_targets += {
++    'CONFIG_BAO': ['aarch64-softmmu']
++  }
++endif
++
+ modular_tcg = []
+ # Darwin does not support references to thread-local variables in modules
+ if targetos != 'darwin'
+@@ -648,6 +654,9 @@ accelerators = []
+ if get_option('kvm').allowed() and targetos == 'linux'
+   accelerators += 'CONFIG_KVM'
+ endif
++if not get_option('bao').disabled()
++  accelerators += 'CONFIG_BAO'
++endif
+ if get_option('whpx').allowed() and targetos == 'windows'
+   if get_option('whpx').enabled() and host_machine.cpu() != 'x86_64'
+     error('WHPX requires 64-bit host')
+@@ -4140,6 +4149,7 @@ endif
+ summary_info = {}
+ if have_system
+   summary_info += {'KVM support':       config_all.has_key('CONFIG_KVM')}
++  summary_info += {'Bao support':       config_all.has_key('CONFIG_BAO')}
+   summary_info += {'HAX support':       config_all.has_key('CONFIG_HAX')}
+   summary_info += {'HVF support':       config_all.has_key('CONFIG_HVF')}
+   summary_info += {'WHPX support':      config_all.has_key('CONFIG_WHPX')}
+diff --git a/meson_options.txt b/meson_options.txt
+index aaea5ddd77..eac2d2d8c3 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -69,6 +69,8 @@ option('malloc', type : 'combo', choices : ['system', 'tcmalloc', 'jemalloc'],
+ 
+ option('kvm', type: 'feature', value: 'auto',
+        description: 'KVM acceleration support')
++option('bao', type: 'feature', value: 'auto',
++       description: 'Bao VirtIO Backend support')
+ option('hax', type: 'feature', value: 'auto',
+        description: 'HAX acceleration support')
+ option('whpx', type: 'feature', value: 'auto',
+diff --git a/qemu-options.hx b/qemu-options.hx
+index 29b98c3d4c..1de38fbcdb 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -26,7 +26,7 @@ DEF("machine", HAS_ARG, QEMU_OPTION_machine, \
+     "-machine [type=]name[,prop[=value][,...]]\n"
+     "                selects emulated machine ('-machine help' for list)\n"
+     "                property accel=accel1[:accel2[:...]] selects accelerator\n"
+-    "                supported accelerators are kvm, xen, hax, hvf, nvmm, whpx or tcg (default: tcg)\n"
++    "                supported accelerators are kvm, bao, xen, hax, hvf, nvmm, whpx or tcg (default: tcg)\n"
+     "                vmport=on|off|auto controls emulation of vmport (default: auto)\n"
+     "                dump-guest-core=on|off include guest memory in a core dump (default=on)\n"
+     "                mem-merge=on|off controls memory merge support (default: on)\n"
+@@ -59,7 +59,7 @@ SRST
+ 
+     ``accel=accels1[:accels2[:...]]``
+         This is used to enable an accelerator. Depending on the target
+-        architecture, kvm, xen, hax, hvf, nvmm, whpx or tcg can be available.
++        architecture, kvm, bao, xen, hax, hvf, nvmm, whpx or tcg can be available.
+         By default, tcg is used. If there is more than one accelerator
+         specified, the next one is used if the previous one fails to
+         initialize.
+@@ -178,7 +178,7 @@ ERST
+ 
+ DEF("accel", HAS_ARG, QEMU_OPTION_accel,
+     "-accel [accel=]accelerator[,prop[=value][,...]]\n"
+-    "                select accelerator (kvm, xen, hax, hvf, nvmm, whpx or tcg; use 'help' for a list)\n"
++    "                select accelerator (kvm, bao, xen, hax, hvf, nvmm, whpx or tcg; use 'help' for a list)\n"
+     "                igd-passthru=on|off (enable Xen integrated Intel graphics passthrough, default=off)\n"
+     "                kernel-irqchip=on|off|split controls accelerated irqchip support (default=on)\n"
+     "                kvm-shadow-mem=size of KVM shadow MMU in bytes\n"
+@@ -191,7 +191,7 @@ DEF("accel", HAS_ARG, QEMU_OPTION_accel,
+ SRST
+ ``-accel name[,prop=value[,...]]``
+     This is used to enable an accelerator. Depending on the target
+-    architecture, kvm, xen, hax, hvf, nvmm, whpx or tcg can be available. By
++    architecture, kvm, bao, xen, hax, hvf, nvmm, whpx or tcg can be available. By
+     default, tcg is used. If there is more than one accelerator
+     specified, the next one is used if the previous one fails to
+     initialize.
+@@ -4497,6 +4497,26 @@ SRST
+     load things like EtherBoot.
+ ERST
+ 
++DEF("bao", HAS_ARG, QEMU_OPTION_bao, \
++    "-bao [dm_id=id][,irq=irq]\n", QEMU_ARCH_ALL)
++SRST
++``-bao option[,option[,option[,...]]]``
++    Create a new VirtIO Device Model instance.
++
++    ``-bao`` accepts all the following options:
++
++    ``dm_id=id``
++        This option defines the ID of the VirtIO Device Model. Note
++        that this ID must be in accordance with the VirtIO ID
++        specified in Bao configuration.
++
++    ``irq=irq``
++        This option defines the QEMU IRQ associated with the device
++        (e.g., qemu-arch64-virt starts with 0x2f for the first device,
++        0x2e for the second, etc.).
++
++ERST
++
+ DEF("rtc", HAS_ARG, QEMU_OPTION_rtc, \
+     "-rtc [base=utc|localtime|<datetime>][,clock=host|rt|vm][,driftfix=none|slew]\n" \
+     "                set the RTC base and clock, enable drift fix for clock ticks (x86 only)\n",
+diff --git a/scripts/meson-buildoptions.sh b/scripts/meson-buildoptions.sh
+index 9da3fe299b..9ea2e4ec3b 100644
+--- a/scripts/meson-buildoptions.sh
++++ b/scripts/meson-buildoptions.sh
+@@ -80,6 +80,7 @@ meson_options_help() {
+   printf "%s\n" '  avx2            AVX2 optimizations'
+   printf "%s\n" '  avx512bw        AVX512BW optimizations'
+   printf "%s\n" '  avx512f         AVX512F optimizations'
++  printf "%s\n" '  bao             Bao VirtIO Backend support'
+   printf "%s\n" '  blkio           libblkio block device driver'
+   printf "%s\n" '  bochs           bochs image format support'
+   printf "%s\n" '  bpf             eBPF support'
+@@ -224,6 +225,8 @@ _meson_option_parse() {
+     --disable-gcov) printf "%s" -Db_coverage=false ;;
+     --enable-lto) printf "%s" -Db_lto=true ;;
+     --disable-lto) printf "%s" -Db_lto=false ;;
++    --enable-bao) printf "%s" -Dbao=enabled ;;
++    --disable-bao) printf "%s" -Dbao=disabled ;;
+     --enable-blkio) printf "%s" -Dblkio=enabled ;;
+     --disable-blkio) printf "%s" -Dblkio=disabled ;;
+     --block-drv-ro-whitelist=*) quote_sh "-Dblock_drv_ro_whitelist=$2" ;;
+diff --git a/softmmu/physmem.c b/softmmu/physmem.c
+index 3df73542e1..58207d19b3 100644
+--- a/softmmu/physmem.c
++++ b/softmmu/physmem.c
+@@ -52,6 +52,7 @@
+ #include "sysemu/hw_accel.h"
+ #include "sysemu/xen-mapcache.h"
+ #include "trace/trace-root.h"
++#include "sysemu/bao.h"
+ 
+ #ifdef CONFIG_FALLOCATE_PUNCH_HOLE
+ #include <linux/falloc.h>
+@@ -1892,6 +1893,39 @@ RAMBlock *qemu_ram_alloc_from_fd(ram_addr_t size, MemoryRegion *mr,
+         return NULL;
+     }
+ 
++    if(bao_enabled()) {
++        struct bao_dm_info info;
++        int ret;
++        /**
++         * The offset is used as the device model ID
++         * Note: If you want to run more than one backend device (and therefore more than one device model),
++         * inside a single QEMU process, you must define the offset value of the first device model
++         * (e.g., 0 - if you pretend to run device model 0 and 1)
++         * (e.g., 2 - if you pretend to run device model 2 and 3)
++         * The `size` must be the sum of the memory size of all device models that you want to run
++         * for the same QEMU process.
++         */
++        info.dm_id = offset;
++        info.shmem_addr = 0;
++        info.shmem_size = 0;
++        info.irq = 0;
++        info.fd = 0;
++        /*< Open the bao-io-dispatcher device node */
++        int bao_io_dispatcher_fd = open("/dev/bao-io-dispatcher", O_RDWR);
++        /*< Get the file descriptor of shared memory */
++        ret = ioctl(bao_io_dispatcher_fd, BAO_IOCTL_IO_DM_GET_INFO, &info);
++        if (ret < 0) {
++            error_setg(errp, "bao no device model configured");
++            return NULL;
++        }
++        
++        /**
++         * Update the file descriptor that QEMU will use to mmap the memory
++         * Note: The shared memory should be contiguous
++         */
++        fd = info.fd;
++    }
++
+     if (kvm_enabled() && !kvm_has_sync_mmu()) {
+         error_setg(errp,
+                    "host lacks kvm mmu notifiers, -mem-path unsupported");
+diff --git a/softmmu/vl.c b/softmmu/vl.c
+index b0b96f67fa..1454ed0a98 100644
+--- a/softmmu/vl.c
++++ b/softmmu/vl.c
+@@ -87,6 +87,7 @@
+ #include "migration/postcopy-ram.h"
+ #include "sysemu/kvm.h"
+ #include "sysemu/hax.h"
++#include "sysemu/bao.h"
+ #include "qapi/qobject-input-visitor.h"
+ #include "qemu/option.h"
+ #include "qemu/config-file.h"
+@@ -218,6 +219,22 @@ static struct {
+     { .driver = "virtio-vga-gl",        .flag = &default_vga       },
+ };
+ 
++static QemuOptsList qemu_bao_opts = {
++    .name = "bao",
++    .head = QTAILQ_HEAD_INITIALIZER(qemu_bao_opts.head),
++    .merge_lists = true,
++    .desc = {
++        {
++            .name = "dm_id",
++            .type = QEMU_OPT_STRING,
++        },{
++            .name = "irq",
++            .type = QEMU_OPT_STRING,
++        },
++        { /* end of list */ }
++    },
++};
++
+ static QemuOptsList qemu_rtc_opts = {
+     .name = "rtc",
+     .head = QTAILQ_HEAD_INITIALIZER(qemu_rtc_opts.head),
+@@ -2683,6 +2700,7 @@ void qemu_init(int argc, char **argv)
+     qemu_add_opts(&qemu_netdev_opts);
+     qemu_add_opts(&qemu_nic_opts);
+     qemu_add_opts(&qemu_net_opts);
++    qemu_add_opts(&qemu_bao_opts);
+     qemu_add_opts(&qemu_rtc_opts);
+     qemu_add_opts(&qemu_global_opts);
+     qemu_add_opts(&qemu_mon_opts);
+@@ -3365,6 +3383,18 @@ void qemu_init(int argc, char **argv)
+             case QEMU_OPTION_old_param:
+                 old_param = 1;
+                 break;
++            case QEMU_OPTION_bao:
++                if (!accel_find("bao")) {
++                    error_report("Option not supported for this target");
++                    exit(1);
++                }
++                opts = qemu_opts_parse_noisily(qemu_find_opts("bao"), optarg,
++                                               false);
++                if (!opts) {
++                    error_report("failed to parse -bao option");
++                    exit(1);
++                }
++                break;
+             case QEMU_OPTION_rtc:
+                 opts = qemu_opts_parse_noisily(qemu_find_opts("rtc"), optarg,
+                                                false);
+diff --git a/target/arm/cpu.c b/target/arm/cpu.c
+index 93c28d50e5..06b9358101 100644
+--- a/target/arm/cpu.c
++++ b/target/arm/cpu.c
+@@ -42,6 +42,7 @@
+ #endif /* !CONFIG_USER_ONLY */
+ #include "sysemu/tcg.h"
+ #include "sysemu/qtest.h"
++#include "sysemu/bao.h"
+ #include "sysemu/hw_accel.h"
+ #include "kvm_arm.h"
+ #include "disas/capstone.h"
+@@ -1625,7 +1626,7 @@ static void arm_cpu_realizefn(DeviceState *dev, Error **errp)
+         }
+     }
+ 
+-    if (!tcg_enabled() && !qtest_enabled()) {
++    if (!tcg_enabled() && !qtest_enabled() && !bao_enabled()) {
+         /*
+          * We assume that no accelerator except TCG (and the "not really an
+          * accelerator" qtest) can handle these features, because Arm hardware

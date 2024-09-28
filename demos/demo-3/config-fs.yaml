@@ -1,0 +1,9 @@
+devices:
+    # --- Common ---
+  - id: 0
+    type: "fs"
+    mmio_addr: 0xa003e00
+    data_plane: vhost_user
+    # --- Vhost_user specific ---
+    socket_path: "/root/"
+    # -----------------------------

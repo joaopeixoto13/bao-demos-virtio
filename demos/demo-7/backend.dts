@@ -1,0 +1,64 @@
+/dts-v1/;
+
+/ {
+	#address-cells = <0x2>;
+	#size-cells = <0x2>;
+
+	cpus {
+		#address-cells = <0x1>;
+		#size-cells = <0x0>;
+		timebase-frequency = <10000000>;
+
+		cpu@0 {
+			device_type = "cpu";
+			reg = <0x0>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imafdcsu";
+			mmu-type = "riscv,sv48";
+
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <0x1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+			};
+		};
+	};
+
+	memory@90000000 {
+		device_type = "memory";
+		reg = <0x0 0x90000000 0x0 0x50000000>;
+	};
+
+	plic: interrupt-controller@c000000 {
+		riscv,ndev = <60>;
+		reg = <0x0 0xc000000 0x0 0x4000000>;
+		interrupts-extended = <
+			&cpu0_intc 11 &cpu0_intc 9 
+		>;
+		interrupt-controller;
+		compatible = "riscv,plic0";
+		#interrupt-cells = <0x1>;
+	};
+
+	bao_io_dispatcher: bao-io-dispatcher {
+		compatible = "bao,io-dispatcher";
+		reg = <0x0 0x70000000 0x0 0x01000000>;
+		interrupts = <0x24>;
+		interrupt-parent = <&plic>;
+	};
+
+	uart0@10000000 {
+        interrupts = <10>;
+        interrupt-parent = <&plic>;
+        clock-frequency = <0x384000>;
+        reg = <0x0 0x10000000 0x0 0x100>;
+        compatible = "ns16550a";
+    };
+
+	chosen {
+		bootargs = "earlycon console=ttyS0 carrier_timeout=0";
+		stdout-path = "/uart0@10000000";
+	};
+
+};

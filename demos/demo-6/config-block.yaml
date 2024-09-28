@@ -1,0 +1,8 @@
+devices:
+  - id: 0
+    type: "block"
+    data_plane: virtio
+    file_path: "/etc/ext4_mountpoint/ext4_frontend_vm_image.img"
+    read_only: false
+    root_device: true
+    advertise_flush: false

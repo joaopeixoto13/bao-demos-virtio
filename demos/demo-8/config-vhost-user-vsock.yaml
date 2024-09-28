@@ -1,0 +1,6 @@
+devices:
+  - id: 0
+    type: "vsock"
+    mmio_addr: 0x10001000
+    data_plane: vhost_user
+    socket_path: "/tmp/"

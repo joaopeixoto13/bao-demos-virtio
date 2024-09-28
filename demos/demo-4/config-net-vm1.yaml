@@ -1,0 +1,9 @@
+devices:
+    # --- Common ---
+  - id: 0
+    type: "net"
+    mmio_addr: 0xa003e00
+    data_plane: virtio
+    # --- VirtIO Net specific ---
+    tap_name: "tap0"
+    mac_addr: "52:54:00:12:34:56"

@@ -1,0 +1,6 @@
+devices:
+    # --- Common ---
+  - id: 0
+    type: "console"
+    mmio_addr: 0x10001000
+    data_plane: virtio

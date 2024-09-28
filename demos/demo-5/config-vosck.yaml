@@ -1,0 +1,8 @@
+devices:
+    # --- Common ---
+  - id: 0
+    type: "vsock"
+    mmio_addr: 0xa003e00
+    data_plane: vhost
+    # --- Vsock specific ---
+    guest_cid: 3
