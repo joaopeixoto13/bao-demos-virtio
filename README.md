@@ -40,6 +40,13 @@ git clone $BAO_DEMOS_VIRTIO_URL $BAO_DEMOS_VIRTIO_DIR --depth=1 --branch=main
 
 ## 2. Backend VM (Linux) Setup
 
+You can opt to:
+
+1) Compiling the I/O Dispatcher kernel module within the Linux kernel’s source tree ([in tree build](#in-tree-build))
+2) Compiling the I/O Dispatcher kernel module outside the Linux kernel source tree ([out tree build](#out-of-tree-build))
+
+### In Tree Build
+
 Setup linux environment variables:
 ```
 export BAO_DEMOS_LINUX_VERSION=v6.11-rc3
@@ -78,6 +85,22 @@ Please note that the patch was made for Linux v6.11-rc3, so earlier and future v
 ```
 export BAO_DEMOS_LINUX_PATCHES=$BAO_DEMOS_LINUX_BAO_IO_DISPATCHER
 ```
+
+### Out of Tree Build
+
+Setup environment variables:
+```
+export BAO_DEMOS_IODISPATCHER_DIR=$BAO_DEMOS_WRKDIR/bao-iodispatcher
+export BAO_DEMOS_IODISPATCHER_URL=git@github.com:joaopeixoto13/bao-iodispatcher.git
+```
+
+Clone the out of tree I/O Dispatcher kernel module from the repo:
+```
+git clone $BAO_DEMOS_IODISPATCHER_URL $BAO_DEMOS_IODISPATCHER_DIR -depth=1 --branch=main
+cd $BAO_DEMOS_IODISPATCHER_DIR
+```
+
+Follow the out of tree I/O Dispatcher kernel module [instructions](https://github.com/joaopeixoto13/bao-iodispatcher).
 
 ## 3. Buildroot Setup
 
