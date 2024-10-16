@@ -29,4 +29,8 @@ cd $BAO_DEMOS_QEMU_DM_DIR
 Enable QEMU package in the buildroot configuration file:
 ```
 echo "BR2_PACKAGE_QEMU=y" >> $BAO_DEMOS_VIRTIO_DIR/configs/buildroot/$ARCH.config
+echo "BR2_PACKAGE_QEMU_SYSTEM=y" >> $BAO_DEMOS_VIRTIO_DIR/configs/buildroot/$ARCH.config
+echo "BR2_PACKAGE_QEMU_BLOBS=y" >> $BAO_DEMOS_VIRTIO_DIR/configs/buildroot/$ARCH.config
+echo "BR2_PACKAGE_QEMU_SLIRP=y" >> $BAO_DEMOS_VIRTIO_DIR/configs/buildroot/$ARCH.config
+echo "BR2_PACKAGE_QEMU_FDT=y" >> $BAO_DEMOS_VIRTIO_DIR/configs/buildroot/$ARCH.config
 ```
