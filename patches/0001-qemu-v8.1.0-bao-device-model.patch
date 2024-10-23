@@ -12,10 +12,10 @@ index 8bdedb7d15..bcd88144d1 100644
 \ No newline at end of file
 diff --git a/accel/bao/bao-all.c b/accel/bao/bao-all.c
 new file mode 100644
-index 0000000000..e5c35ef864
+index 0000000000..ed4b31fb22
 --- /dev/null
 +++ b/accel/bao/bao-all.c
-@@ -0,0 +1,665 @@
+@@ -0,0 +1,663 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao Source File
@@ -160,7 +160,7 @@ index 0000000000..e5c35ef864
 +
 +int bao_notify_io_completed(struct bao_frontend_dm *self, struct bao_virtio_request *req)
 +{
-+    return ioctl(self->dm_fd, BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED, req);
++    return ioctl(self->dm_fd, BAO_IOCTL_IO_REQUEST_COMPLETE, req);
 +}
 +
 +int bao_create_ioeventfd(struct bao_frontend_dm *self, struct bao_ioeventfd *ioeventfd)
@@ -349,9 +349,7 @@ index 0000000000..e5c35ef864
 +        s->dm.req.op = BAO_IO_ASK;
 +        s->dm.req.value = 0x0;
 +        s->dm.req.access_width = 0x0;
-+        s->dm.req.cpu_id = 0x0;
-+        s->dm.req.vcpu_id = 0x0;
-+        s->dm.req.ret = 0x0;
++        s->dm.req.request_id = 0x0;
 +
 +        /**< Attach the control client */
 +        rc = s->dm.attach_io_client(&s->dm, &s->dm.req);
@@ -684,10 +682,10 @@ index 0000000000..e5c35ef864
 \ No newline at end of file
 diff --git a/accel/bao/bao.h b/accel/bao/bao.h
 new file mode 100644
-index 0000000000..ed4cf5b759
+index 0000000000..b8518bcb36
 --- /dev/null
 +++ b/accel/bao/bao.h
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,149 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Bao Header File
@@ -723,9 +721,7 @@ index 0000000000..ed4cf5b759
 +	uint64_t op;            /**< Operation */
 +	uint64_t value;         /**< Value */
 +	uint64_t access_width;  /**< Access width */
-+    uint64_t cpu_id;        /**< Frontend CPU ID */
-+    uint64_t vcpu_id;       /**< Frontend VCPU ID */
-+	int32_t ret;            /**< Return value */
++    uint64_t request_id;    /**< Request ID */
 +};
 +
 +/**
@@ -1199,7 +1195,7 @@ index 0000000000..d4c0c65d4b
 \ No newline at end of file
 diff --git a/include/sysemu/bao.h b/include/sysemu/bao.h
 new file mode 100644
-index 0000000000..422ff12e7e
+index 0000000000..32a1f5de45
 --- /dev/null
 +++ b/include/sysemu/bao.h
 @@ -0,0 +1,73 @@
@@ -1239,7 +1235,7 @@ index 0000000000..422ff12e7e
 +#define BAO_IOCTL_TYPE 0xA6
 +#define BAO_IOCTL_IO_DM_GET_INFO _IOWR(BAO_IOCTL_TYPE, 0x01, struct bao_dm_info)
 +#define BAO_IOCTL_IO_CLIENT_ATTACH _IOWR(BAO_IOCTL_TYPE, 0x02, struct bao_virtio_request)
-+#define BAO_IOCTL_IO_REQUEST_NOTIFY_COMPLETED \
++#define BAO_IOCTL_IO_REQUEST_COMPLETE \
 +	_IOW(BAO_IOCTL_TYPE, 0x03, struct bao_virtio_request)
 +#define BAO_IOCTL_IOEVENTFD _IOW(BAO_IOCTL_TYPE, 0x04, struct bao_ioeventfd)
 +#define BAO_IOCTL_IRQFD _IOW(BAO_IOCTL_TYPE, 0x05, struct bao_irqfd)
@@ -1414,7 +1410,7 @@ index 9da3fe299b..9ea2e4ec3b 100644
      --disable-blkio) printf "%s" -Dblkio=disabled ;;
      --block-drv-ro-whitelist=*) quote_sh "-Dblock_drv_ro_whitelist=$2" ;;
 diff --git a/softmmu/physmem.c b/softmmu/physmem.c
-index 3df73542e1..58207d19b3 100644
+index 3df73542e1..e5fbc69f53 100644
 --- a/softmmu/physmem.c
 +++ b/softmmu/physmem.c
 @@ -52,6 +52,7 @@
@@ -1425,7 +1421,7 @@ index 3df73542e1..58207d19b3 100644
  
  #ifdef CONFIG_FALLOCATE_PUNCH_HOLE
  #include <linux/falloc.h>
-@@ -1892,6 +1893,39 @@ RAMBlock *qemu_ram_alloc_from_fd(ram_addr_t size, MemoryRegion *mr,
+@@ -1892,6 +1893,44 @@ RAMBlock *qemu_ram_alloc_from_fd(ram_addr_t size, MemoryRegion *mr,
          return NULL;
      }
  
@@ -1460,6 +1456,11 @@ index 3df73542e1..58207d19b3 100644
 +         * Note: The shared memory should be contiguous
 +         */
 +        fd = info.fd;
++
++        /**
++         * Define offset as 0 since the base address is already defined in the device tree node
++         */
++        offset = 0;
 +    }
 +
      if (kvm_enabled() && !kvm_has_sync_mmu()) {
